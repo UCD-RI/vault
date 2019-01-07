@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -340,6 +341,31 @@ type Client struct {
 	wrappingLookupFunc WrappingLookupFunc
 	mfaCreds           []string
 	policyOverride     bool
+}
+
+func NewAgentClient(client *Client) (*Client, error) {
+	var err error
+	if client == nil {
+		client, err = NewClient(nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	socketFilePath := os.Getenv("VAULT_AGENT_ADDR")
+	if socketFilePath == "" {
+		return nil, fmt.Errorf("socket file not specified")
+	}
+
+	client.config.HttpClient = &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return net.Dial("unix", socketFilePath)
+			},
+		},
+	}
+
+	return client, nil
 }
 
 // NewClient returns a new client for the given configuration.
@@ -792,4 +818,37 @@ START:
 	}
 
 	return result, nil
+}
+
+func (c *Client) Request(r *http.Request) (*Secret, error) {
+	req := c.NewRequest(r.Method, r.URL.Path)
+	err := req.SetJSONBody(req.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	defer cancelFunc()
+	resp, err := c.RawRequestWithContext(ctx, req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if resp != nil && resp.StatusCode == 404 {
+		secret, parseErr := ParseSecret(resp.Body)
+		switch parseErr {
+		case nil:
+		case io.EOF:
+			return nil, nil
+		default:
+			return nil, err
+		}
+		if secret != nil && (len(secret.Warnings) > 0 || len(secret.Data) > 0) {
+			return secret, nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return ParseSecret(resp.Body)
 }

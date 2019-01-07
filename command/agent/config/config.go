@@ -19,9 +19,20 @@ import (
 
 // Config is the configuration for the vault server.
 type Config struct {
-	AutoAuth      *AutoAuth `hcl:"auto_auth"`
-	ExitAfterAuth bool      `hcl:"exit_after_auth"`
-	PidFile       string    `hcl:"pid_file"`
+	AutoAuth      *AutoAuth     `hcl:"auto_auth"`
+	ExitAfterAuth bool          `hcl:"exit_after_auth"`
+	PidFile       string        `hcl:"pid_file"`
+	CachingProxy  *CachingProxy `hcl:"caching_proxy"`
+}
+
+type CachingProxy struct {
+	UseAutoAuthToken bool        `hcl:"use_auto_auth_token"`
+	Listeners        []*Listener `hcl:"listeners"`
+}
+
+type Listener struct {
+	Type   string
+	Config map[string]interface{}
 }
 
 type AutoAuth struct {
@@ -91,7 +102,84 @@ func LoadConfig(path string, logger log.Logger) (*Config, error) {
 		return nil, errwrap.Wrapf("error parsing 'auto_auth': {{err}}", err)
 	}
 
+	err = parseCachingProxy(&result, list)
+	if err != nil {
+		return nil, errwrap.Wrapf("error parsing 'caching_proxy':{{err}}", err)
+	}
+
 	return &result, nil
+}
+
+func parseCachingProxy(result *Config, list *ast.ObjectList) error {
+	name := "caching_proxy"
+
+	cachingProxyList := list.Filter(name)
+	if len(cachingProxyList.Items) != 1 {
+		return fmt.Errorf("one and only one %q block is required", name)
+	}
+
+	item := cachingProxyList.Items[0]
+
+	var c CachingProxy
+	err := hcl.DecodeObject(&c, item.Val)
+	if err != nil {
+		return err
+	}
+
+	result.CachingProxy = &c
+
+	subs, ok := item.Val.(*ast.ObjectType)
+	if !ok {
+		return fmt.Errorf("could not parse %q as an object", name)
+	}
+	subList := subs.List
+
+	err = parseListeners(result, subList)
+	if err != nil {
+		return errwrap.Wrapf("error parsing 'listener' stanzas: {{err}}", err)
+	}
+
+	return nil
+}
+
+func parseListeners(result *Config, list *ast.ObjectList) error {
+	name := "listener"
+
+	listenerList := list.Filter(name)
+	if len(listenerList.Items) < 1 {
+		return fmt.Errorf("at least one %q block is required", name)
+	}
+
+	var listeners []*Listener
+	for _, item := range listenerList.Items {
+		if len(item.Keys) != 1 {
+			return errors.New("listener type must be specified")
+		}
+		lnType := strings.ToLower(item.Keys[0].Token.Value().(string))
+
+		switch lnType {
+		case "unix", "tcp":
+		default:
+			return fmt.Errorf("invalid listener type %q", lnType)
+		}
+
+		var lnConfig map[string]interface{}
+		err := hcl.DecodeObject(&lnConfig, item.Val)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("listener.m: %#v\n", lnConfig)
+
+		listeners = append(listeners, &Listener{
+			Type:   lnType,
+			Config: lnConfig,
+		})
+	}
+
+	result.CachingProxy.Listeners = listeners
+
+	return nil
 }
 
 func parseAutoAuth(result *Config, list *ast.ObjectList) error {

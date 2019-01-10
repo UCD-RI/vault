@@ -844,7 +844,7 @@ func (c *Client) Request(r *http.Request) (*Response, error) {
 	req := c.NewRequest(r.Method, r.URL.Path)
 	err := req.SetJSONBody(req.Body)
 	if err != nil {
-		return nil, err
+		return nil, 0, nil, err
 	}
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
@@ -867,7 +867,7 @@ func (c *Client) Request(r *http.Request) (*Response, error) {
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, nil, err
 	}
 
 	return ParseSecret(resp.Body)

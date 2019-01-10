@@ -23,7 +23,6 @@ import (
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
 	"github.com/hashicorp/vault/command/agent/auth/approle"
@@ -33,6 +32,7 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
 	"github.com/hashicorp/vault/command/agent/config"
+	"github.com/hashicorp/vault/command/agent/proxy"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
@@ -351,10 +351,6 @@ func (c *AgentCommand) Run(args []string) int {
 	go ah.Run(ctx, method)
 	go ss.Run(ctx, ah.OutputCh, sinks)
 
-	cachingProxy := agent.NewCachingProxy(&agent.CachingProxyConfig{
-		Client: client,
-	})
-
 	// Start agent listeners
 	var listeners []net.Listener
 	if len(config.CachingProxy.Listeners) != 0 {
@@ -365,9 +361,17 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
+	// Initialize cache and indexer
+	proxyCache, err := proxy.NewCache()
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
+		return 1
+	}
+
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
-		mux.Handle("/", handleRequest(cachingProxy, client))
+		mux.Handle("/v1/agent/cache-clear", handleCacheClear(proxyCache))
+		mux.Handle("/", handleRequest(client, proxyCache))
 		go http.Serve(ln, mux)
 	}
 
@@ -434,19 +438,37 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(cachingProxy *agent.CachingProxy, client *api.Client) http.Handler {
+func handleRequest(client *api.Client, proxyCache *proxy.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Request is received by the agent
-		fmt.Printf("agent received request: %#v\n", r)
+		fmt.Printf("req: %#v\n", r)
 
-		// TODO: Look if the secret is already present in the cache
-		// TODO: If the secret is present in cache, return it
+		rawKey, err := proxy.ParseRequestKey(r)
+		if err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		key := string(rawKey)
+
+		// Attempt to get a cached response for this cache key before forwarding the request
+		data, err := proxyCache.Get(client.Token(), key)
+		if err != nil {
+			fmt.Println("error getting cached request:", err)
+			w.WriteHeader(400)
+			return
+		}
+		if data != nil {
+			fmt.Println("got cached request!")
+			fmt.Println(string(data.Data))
+			return
+		}
+
+		fmt.Println("forwarding request...")
 
 		// Secret is not present in the cache. Forward the request to Vault.
 		fwReq := client.NewRequest(r.Method, r.URL.Path)
 
 		var out map[string]interface{}
-		err := jsonutil.DecodeJSONFromReader(r.Body, &out)
+		err = jsonutil.DecodeJSONFromReader(r.Body, &out)
 		if err != nil && err != io.EOF {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
 			return
@@ -466,20 +488,52 @@ func handleRequest(cachingProxy *agent.CachingProxy, client *api.Client) http.Ha
 			return
 		}
 
-		// Read the secret from the response
-		secret, err := api.ParseSecret(resp.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("parsing secret failed: {{err}}", err))
+		// Cache the response
+		// TODO: Cache the actual body
+		if err := proxyCache.Insert(key, client.Token(), nil); err != nil {
+			fmt.Println("could not insert into cache", err)
 			return
 		}
-		fmt.Printf("secret in agent: %#v\n", secret)
+
+		// Write the forwarded response to the response writer
+		// TODO: Return an actual response
+
+		// copyHeader(w.Header(), header)
+		// w.WriteHeader(status)
+		// w.Write()
+
+		return
+	})
+}
+
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
+func handleCacheClear(proxyCache *proxy.Cache) http.Handler {
+	type request struct {
+		Type string `json:"type"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := new(request)
+
+		err := jsonutil.DecodeJSONFromReader(r.Body, req)
+		if err != nil && err != io.EOF {
+			w.WriteHeader(400)
+			return
+		}
 
 		// TODO: Cache the secret
 
 		// TODO: Renew the secret
 
 		// Return the response to the client
-		respondOk(w, secret)
+		return
 	})
 }
 

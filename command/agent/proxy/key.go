@@ -15,10 +15,11 @@ type RequestKey struct {
 	BodyParams  map[string]interface{}
 }
 
-// ParseRequestKey takes in the request path and the body
-func ParseRequestKey(req *http.Request) ([]byte, error) {
+// ComputeCacheKey results in a value that uniquely identifies a request
+// received by the agent. It does so by SHA256 hashing the marshalled JSON
+// which contains the request path, query parameters and body parameters.
+func ComputeCacheKey(req *http.Request) (string, error) {
 	reqPath := req.URL.EscapedPath()
-
 	rawQuery := req.URL.Query()
 
 	var body map[string]interface{}
@@ -29,7 +30,7 @@ func ParseRequestKey(req *http.Request) ([]byte, error) {
 		case err == io.EOF:
 			// empty body
 		case err != nil:
-			return nil, err
+			return "", err
 		}
 	}
 
@@ -41,9 +42,9 @@ func ParseRequestKey(req *http.Request) ([]byte, error) {
 
 	raw, err := json.Marshal(requestKey)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	sum := sha256.Sum256(raw)
-	return sum[:], nil
+	return string(sum[:]), nil
 }

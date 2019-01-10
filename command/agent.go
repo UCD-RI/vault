@@ -442,15 +442,14 @@ func handleRequest(client *api.Client, proxyCache *proxy.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("req: %#v\n", r)
 
-		rawKey, err := proxy.ParseRequestKey(r)
+		cacheKey, err := proxy.ComputeCacheKey(r)
 		if err != nil {
-			w.WriteHeader(400)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
 			return
 		}
-		key := string(rawKey)
 
 		// Attempt to get a cached response for this cache key before forwarding the request
-		data, err := proxyCache.Get(client.Token(), key)
+		data, err := proxyCache.Get(client.Token(), cacheKey)
 		if err != nil {
 			fmt.Println("error getting cached request:", err)
 			w.WriteHeader(400)
@@ -490,7 +489,7 @@ func handleRequest(client *api.Client, proxyCache *proxy.Cache) http.Handler {
 
 		// Cache the response
 		// TODO: Cache the actual body
-		if err := proxyCache.Insert(key, client.Token(), nil); err != nil {
+		if err := proxyCache.Insert(cacheKey, client.Token(), nil); err != nil {
 			fmt.Println("could not insert into cache", err)
 			return
 		}

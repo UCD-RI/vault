@@ -353,8 +353,8 @@ func (c *AgentCommand) Run(args []string) int {
 
 	// Start agent listeners
 	var listeners []net.Listener
-	if len(config.CachingProxy.Listeners) != 0 {
-		listeners, err = serverListeners(config.CachingProxy.Listeners, c.logWriter, c.UI)
+	if len(config.Cache.Listeners) != 0 {
+		listeners, err = serverListeners(config.Cache.Listeners, c.logWriter, c.UI)
 		if err != nil {
 			c.UI.Error(fmt.Sprintf("Error running listeners: %v", err))
 			return 1

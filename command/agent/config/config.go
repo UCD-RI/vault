@@ -19,13 +19,13 @@ import (
 
 // Config is the configuration for the vault server.
 type Config struct {
-	AutoAuth      *AutoAuth     `hcl:"auto_auth"`
-	ExitAfterAuth bool          `hcl:"exit_after_auth"`
-	PidFile       string        `hcl:"pid_file"`
-	CachingProxy  *CachingProxy `hcl:"caching_proxy"`
+	AutoAuth      *AutoAuth `hcl:"auto_auth"`
+	ExitAfterAuth bool      `hcl:"exit_after_auth"`
+	PidFile       string    `hcl:"pid_file"`
+	Cache         *Cache    `hcl:"cache"`
 }
 
-type CachingProxy struct {
+type Cache struct {
 	UseAutoAuthToken bool        `hcl:"use_auto_auth_token"`
 	Listeners        []*Listener `hcl:"listeners"`
 }
@@ -102,31 +102,31 @@ func LoadConfig(path string, logger log.Logger) (*Config, error) {
 		return nil, errwrap.Wrapf("error parsing 'auto_auth': {{err}}", err)
 	}
 
-	err = parseCachingProxy(&result, list)
+	err = parseCache(&result, list)
 	if err != nil {
-		return nil, errwrap.Wrapf("error parsing 'caching_proxy':{{err}}", err)
+		return nil, errwrap.Wrapf("error parsing 'cache':{{err}}", err)
 	}
 
 	return &result, nil
 }
 
-func parseCachingProxy(result *Config, list *ast.ObjectList) error {
-	name := "caching_proxy"
+func parseCache(result *Config, list *ast.ObjectList) error {
+	name := "cache"
 
-	cachingProxyList := list.Filter(name)
-	if len(cachingProxyList.Items) != 1 {
+	cacheList := list.Filter(name)
+	if len(cacheList.Items) != 1 {
 		return fmt.Errorf("one and only one %q block is required", name)
 	}
 
-	item := cachingProxyList.Items[0]
+	item := cacheList.Items[0]
 
-	var c CachingProxy
+	var c Cache
 	err := hcl.DecodeObject(&c, item.Val)
 	if err != nil {
 		return err
 	}
 
-	result.CachingProxy = &c
+	result.Cache = &c
 
 	subs, ok := item.Val.(*ast.ObjectType)
 	if !ok {
@@ -177,7 +177,7 @@ func parseListeners(result *Config, list *ast.ObjectList) error {
 		})
 	}
 
-	result.CachingProxy.Listeners = listeners
+	result.Cache.Listeners = listeners
 
 	return nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -840,7 +839,8 @@ START:
 	return result, nil
 }
 
-func (c *Client) Request(r *http.Request) (*Secret, error) {
+/*
+func (c *Client) Request(r *http.Request) (*Response, error) {
 	req := c.NewRequest(r.Method, r.URL.Path)
 	err := req.SetJSONBody(req.Body)
 	if err != nil {
@@ -872,3 +872,4 @@ func (c *Client) Request(r *http.Request) (*Secret, error) {
 
 	return ParseSecret(resp.Body)
 }
+*/

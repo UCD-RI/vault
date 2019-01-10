@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -39,6 +40,8 @@ import (
 	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
 	"github.com/hashicorp/vault/helper/tlsutil"
+	vaulthttp "github.com/hashicorp/vault/http"
+	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/version"
 )
 
@@ -431,20 +434,40 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 }
 
 func handleRequest(cachingProxy *agent.CachingProxy, client *api.Client) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Request is received by the agent
-		fmt.Printf("req: %#v\n", req)
+		fmt.Printf("agent received request: %#v\n", r)
 
-		// Look if the response for the request is present in the cache
+		// TODO: Look if the secret is already present in the cache
+		// TODO: If the secret is present in cache, return it
 
-		// If the response is not in the cache, forward the request to Vault
-		secret, err := client.Request(req)
-		if err != nil {
-			fmt.Printf("forwarding error: %v\n", err)
+		// Secret is not present in the cache. Forward the request to Vault.
+		fwReq := client.NewRequest(r.Method, r.URL.Path)
+		fwReq.SetJSONBody(r.Body)
+
+		ctx, cancelFunc := context.WithCancel(context.Background())
+		defer cancelFunc()
+
+		resp, err := client.RawRequestWithContext(ctx, fwReq)
+		if resp != nil {
+			defer resp.Body.Close()
 		}
-		fmt.Printf("secret: %#v\n", secret)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err)
+			return
+		}
 
-		return
+		// Read the secret from the response
+		secret, err := api.ParseSecret(resp.Body)
+		if err != nil {
+			fmt.Printf("parsing secret failed: %v\n", err)
+			return
+		}
+
+		// TODO: Cache the secret
+
+		// Return the response to the client
+		respondOk(w, secret)
 	})
 }
 
@@ -690,4 +713,33 @@ PASSPHRASECORRECT:
 	ln = tls.NewListener(ln, tlsConf)
 	props["tls"] = "enabled"
 	return ln, props, cg.Reload, nil
+}
+
+func respondError(w http.ResponseWriter, status int, err error) {
+	logical.AdjustErrorStatusCode(&status, err)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	resp := &vaulthttp.ErrorResponse{Errors: make([]string, 0, 1)}
+	if err != nil {
+		resp.Errors = append(resp.Errors, err.Error())
+	}
+
+	enc := json.NewEncoder(w)
+	enc.Encode(resp)
+}
+
+func respondOk(w http.ResponseWriter, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if body == nil {
+		fmt.Printf("body is nil here\n")
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		fmt.Printf("body is being written\n")
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		enc.Encode(body)
+	}
 }

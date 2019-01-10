@@ -31,8 +31,8 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/gcp"
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
+	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/command/agent/config"
-	"github.com/hashicorp/vault/command/agent/proxy"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
@@ -362,7 +362,7 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Initialize cache and indexer
-	proxyCache, err := proxy.NewCache()
+	proxyCache, err := cache.NewCache()
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
@@ -438,11 +438,11 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(client *api.Client, proxyCache *proxy.Cache) http.Handler {
+func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("req: %#v\n", r)
 
-		cacheKey, err := proxy.ComputeCacheKey(r)
+		cacheKey, err := cache.ComputeCacheKey(r)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
 			return
@@ -513,7 +513,7 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func handleCacheClear(proxyCache *proxy.Cache) http.Handler {
+func handleCacheClear(proxyCache *cache.Cache) http.Handler {
 	type request struct {
 		Type string `json:"type"`
 	}

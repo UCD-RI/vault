@@ -36,6 +36,7 @@ import (
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
+	"github.com/hashicorp/vault/helper/jsonutil"
 	"github.com/hashicorp/vault/helper/logging"
 	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
@@ -443,7 +444,15 @@ func handleRequest(cachingProxy *agent.CachingProxy, client *api.Client) http.Ha
 
 		// Secret is not present in the cache. Forward the request to Vault.
 		fwReq := client.NewRequest(r.Method, r.URL.Path)
-		fwReq.SetJSONBody(r.Body)
+
+		var out map[string]interface{}
+		err := jsonutil.DecodeJSONFromReader(r.Body, &out)
+		if err != nil && err != io.EOF {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
+			return
+		}
+
+		fwReq.SetJSONBody(out)
 
 		ctx, cancelFunc := context.WithCancel(context.Background())
 		defer cancelFunc()
@@ -460,11 +469,14 @@ func handleRequest(cachingProxy *agent.CachingProxy, client *api.Client) http.Ha
 		// Read the secret from the response
 		secret, err := api.ParseSecret(resp.Body)
 		if err != nil {
-			fmt.Printf("parsing secret failed: %v\n", err)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("parsing secret failed: {{err}}", err))
 			return
 		}
+		fmt.Printf("secret in agent: %#v\n", secret)
 
 		// TODO: Cache the secret
+
+		// TODO: Renew the secret
 
 		// Return the response to the client
 		respondOk(w, secret)
@@ -734,10 +746,8 @@ func respondOk(w http.ResponseWriter, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if body == nil {
-		fmt.Printf("body is nil here\n")
 		w.WriteHeader(http.StatusNoContent)
 	} else {
-		fmt.Printf("body is being written\n")
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
 		enc.Encode(body)

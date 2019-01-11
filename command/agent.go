@@ -444,6 +444,15 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("req: %#v\n", r)
 
+		reqBody, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read request body: {{err}}", err))
+			return
+		}
+
+		// Reset request body
+		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
+
 		cacheKey, err := cache.ComputeCacheKey(r)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
@@ -495,7 +504,7 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 
 		// Deserialize the request and set the body for the API request
 		var out map[string]interface{}
-		err = jsonutil.DecodeJSONFromReader(r.Body, &out)
+		err = jsonutil.DecodeJSONFromReader(ioutil.NopCloser(bytes.NewBuffer(reqBody)), &out)
 		if err != nil && err != io.EOF {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
 			return

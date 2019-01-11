@@ -444,34 +444,35 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("req: %#v\n", r)
 
+		// Read the body out and reset the request body. This is to ensure that
+		// body can still be read while forwarding the request below.
 		reqBody, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read request body: {{err}}", err))
 			return
 		}
-
-		// Reset request body
 		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
 
+		// Compute the cache key to perform a lookup in the cache
 		cacheKey, err := cache.ComputeCacheKey(r)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
 			return
 		}
 
-		// Attempt to get an index for the cache key
+		// Check if the response for this request is already in the cache
 		index, err := db.Get(client.Token(), cacheKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
 			return
 		}
 		if index != nil {
+			// Cached request is found
 			fmt.Println("========= got cached request!")
 			fmt.Println(string(index.Response))
 
 			// Deserialize the response
-			ioReader := bytes.NewReader(index.Response)
-			reader := bufio.NewReader(ioReader)
+			reader := bufio.NewReader(bytes.NewReader(index.Response))
 			resp, err := http.ReadResponse(reader, nil)
 			if resp != nil {
 				defer resp.Body.Close()
@@ -481,6 +482,7 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 				return
 			}
 
+			// Read the response body and return it to the client
 			body, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
@@ -504,7 +506,8 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 
 		// Deserialize the request and set the body for the API request
 		var out map[string]interface{}
-		err = jsonutil.DecodeJSONFromReader(ioutil.NopCloser(bytes.NewBuffer(reqBody)), &out)
+		//err = jsonutil.DecodeJSONFromReader(ioutil.NopCloser(bytes.NewBuffer(reqBody)), &out)
+		err = jsonutil.DecodeJSONFromReader(bytes.NewReader(reqBody), &out)
 		if err != nil && err != io.EOF {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
 			return
@@ -538,7 +541,6 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 		err = resp.Write(&respBytes)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-			w.WriteHeader(400)
 			return
 		}
 
@@ -547,7 +549,7 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 		// Cache the response
 		// TODO: Cache the actual body
 		if err := db.Insert(cacheKey, client.Token(), respBytes.Bytes()); err != nil {
-			fmt.Println("could not insert into cache", err)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
 			return
 		}
 
@@ -555,7 +557,6 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body)
-
 		return
 	})
 }

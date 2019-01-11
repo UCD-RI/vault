@@ -459,10 +459,10 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 		}
 		if data != nil {
 			fmt.Println("========= got cached request!")
-			fmt.Println(string(data.Data))
+			fmt.Println(string(data.Response))
 
 			// Deserialize the response
-			ioReader := bytes.NewReader(data.Data)
+			ioReader := bytes.NewReader(data.Response)
 			reader := bufio.NewReader(ioReader)
 			resp, err := http.ReadResponse(reader, nil)
 			if err != nil {

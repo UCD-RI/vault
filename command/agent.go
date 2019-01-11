@@ -364,7 +364,7 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Initialize cache and indexer
-	proxyCache, err := cache.New()
+	cache, err := cache.New()
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
@@ -372,8 +372,8 @@ func (c *AgentCommand) Run(args []string) int {
 
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
-		mux.Handle("/v1/agent/cache-clear", handleCacheClear(proxyCache))
-		mux.Handle("/", handleRequest(client, proxyCache))
+		mux.Handle("/v1/agent/cache-clear", handleCacheClear(cache))
+		mux.Handle("/", handleRequest(client, cache))
 		go http.Serve(ln, mux)
 	}
 
@@ -440,7 +440,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
+func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("req: %#v\n", r)
 
@@ -450,34 +450,31 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 			return
 		}
 
-		// Attempt to get a cached response for this cache key before forwarding the request
-		data, err := proxyCache.Get(client.Token(), cacheKey)
+		// Attempt to get an index for the cache key
+		index, err := db.Get(client.Token(), cacheKey)
 		if err != nil {
-			fmt.Println("error getting cached request:", err)
-			w.WriteHeader(400)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
 			return
 		}
-		if data != nil {
+		if index != nil {
 			fmt.Println("========= got cached request!")
-			fmt.Println(string(data.Response))
+			fmt.Println(string(index.Response))
 
 			// Deserialize the response
-			ioReader := bytes.NewReader(data.Response)
+			ioReader := bytes.NewReader(index.Response)
 			reader := bufio.NewReader(ioReader)
 			resp, err := http.ReadResponse(reader, nil)
-			if err != nil {
-				fmt.Println("unable to deserialize cached response")
-				w.WriteHeader(400)
-				return
-			}
 			if resp != nil {
 				defer resp.Body.Close()
+			}
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to deserialize cached response: {{err}}", err))
+				return
 			}
 
 			body, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
-				fmt.Println("unable to read cached response body")
-				w.WriteHeader(400)
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
 				return
 			}
 
@@ -488,20 +485,24 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 			return
 		}
 
+		//
+		// Secret is not present in the cache. Forward the request to Vault.
+		//
 		fmt.Println("========= forwarding request...")
 
-		// Secret is not present in the cache. Forward the request to Vault.
+		// Create a new API request to forward the request to Vault
 		fwReq := client.NewRequest(r.Method, r.URL.Path)
 
+		// Deserialize the request and set the body for the API request
 		var out map[string]interface{}
 		err = jsonutil.DecodeJSONFromReader(r.Body, &out)
 		if err != nil && err != io.EOF {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
 			return
 		}
-
 		fwReq.SetJSONBody(out)
 
+		// Create a context for the forwarding request
 		ctx, cancelFunc := context.WithCancel(context.Background())
 		defer cancelFunc()
 
@@ -510,23 +511,24 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 			defer resp.Body.Close()
 		}
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, err)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to forward request to Vault: {{err}}", err))
 			return
 		}
 
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Println("unable to read response body:", err)
-			w.WriteHeader(400)
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
 			return
 		}
 
 		// Reset response body
-		resp.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+		resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
 		// Serialze the reponse
 		var respBytes bytes.Buffer
-		if err := resp.Write(&respBytes); err != nil {
+		err = resp.Write(&respBytes)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
 			w.WriteHeader(400)
 			return
 		}
@@ -535,7 +537,7 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 
 		// Cache the response
 		// TODO: Cache the actual body
-		if err := proxyCache.Insert(cacheKey, client.Token(), respBytes.Bytes()); err != nil {
+		if err := db.Insert(cacheKey, client.Token(), respBytes.Bytes()); err != nil {
 			fmt.Println("could not insert into cache", err)
 			return
 		}
@@ -543,7 +545,7 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 		// Write the forwarded response to the response writer
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
-		w.Write(bodyBytes)
+		w.Write(body)
 
 		return
 	})
@@ -557,7 +559,7 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func handleCacheClear(proxyCache *cache.Cache) http.Handler {
+func handleCacheClear(db *cache.Cache) http.Handler {
 	type request struct {
 		Type string `json:"type"`
 	}
@@ -570,12 +572,6 @@ func handleCacheClear(proxyCache *cache.Cache) http.Handler {
 			w.WriteHeader(400)
 			return
 		}
-
-		// TODO: Cache the secret
-
-		// TODO: Renew the secret
-
-		// Return the response to the client
 		return
 	})
 }

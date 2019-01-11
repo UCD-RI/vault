@@ -506,7 +506,6 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 
 		// Deserialize the request and set the body for the API request
 		var out map[string]interface{}
-		//err = jsonutil.DecodeJSONFromReader(ioutil.NopCloser(bytes.NewBuffer(reqBody)), &out)
 		err = jsonutil.DecodeJSONFromReader(bytes.NewReader(reqBody), &out)
 		if err != nil && err != io.EOF {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
@@ -527,16 +526,38 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 			return
 		}
 
+		// Read the body out and reset the response body. The read out body
+		// will be returned to the client.
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
 			return
 		}
-
-		// Reset response body
 		resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
-		// Serialze the reponse
+		secret, err := api.ParseSecret(bytes.NewReader(body))
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to parse secret from response: {{err}}", err))
+			return
+		}
+
+		// Fast path if the response is not cacheable
+		if secret.Auth == nil && secret.LeaseID == "" {
+			// Write the forwarded response to the response writer
+			copyHeader(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			w.Write(body)
+			return
+		}
+
+		// Handle response renewals
+		err = handleSecret(secret)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to handle secret: {{err}}", err))
+			return
+		}
+
+		// Serialze the reponse to persist in cache
 		var respBytes bytes.Buffer
 		err = resp.Write(&respBytes)
 		if err != nil {
@@ -559,6 +580,11 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 		w.Write(body)
 		return
 	})
+}
+
+func handleSecret(secret *api.Secret) error {
+	fmt.Printf("handleSecret: secret: %#v\n", secret)
+	return nil
 }
 
 func copyHeader(dst, src http.Header) {

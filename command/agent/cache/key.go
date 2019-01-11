@@ -1,50 +1,23 @@
 package cache
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
-	"net/url"
 )
-
-// RequestKey holds the request path and parameters from an incoming request.
-type RequestKey struct {
-	Path        string
-	QueryParams url.Values
-	BodyParams  map[string]interface{}
-}
 
 // ComputeCacheKey results in a value that uniquely identifies a request
 // received by the agent. It does so by SHA256 hashing the marshalled JSON
 // which contains the request path, query parameters and body parameters.
 func ComputeCacheKey(req *http.Request) (string, error) {
-	reqPath := req.URL.EscapedPath()
-	rawQuery := req.URL.Query()
+	var b bytes.Buffer
 
-	var body map[string]interface{}
-	if req.Body != nil {
-		decoder := json.NewDecoder(req.Body)
-		err := decoder.Decode(&body)
-		switch {
-		case err == io.EOF:
-			// empty body
-		case err != nil:
-			return "", err
-		}
+	// Serialze the request
+	if err := req.Write(&b); err != nil {
+		return "", fmt.Errorf("unable to serialize request: %v", err)
 	}
 
-	requestKey := &RequestKey{
-		Path:        reqPath,
-		QueryParams: rawQuery,
-		BodyParams:  body,
-	}
-
-	raw, err := json.Marshal(requestKey)
-	if err != nil {
-		return "", err
-	}
-
-	sum := sha256.Sum256(raw)
+	sum := sha256.Sum256(b.Bytes())
 	return string(sum[:]), nil
 }

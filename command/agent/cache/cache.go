@@ -37,8 +37,8 @@ type Cache struct {
 	cache *memdb.MemDB
 }
 
-// NewCache creates a new cache map object.
-func NewCache() (*Cache, error) {
+// New creates a new cache map object.
+func New() (*Cache, error) {
 	cacheSchema := &memdb.DBSchema{
 		Tables: map[string]*memdb.TableSchema{
 			"indexer": &memdb.TableSchema{
@@ -108,6 +108,7 @@ func (c *Cache) Insert(requestKey, tokenID string, data []byte) error {
 	txn := c.cache.Txn(true)
 	defer txn.Abort()
 
+	// TODO: Properly set TrackedKey and TrackedKeyType
 	index := &Index{
 		RequestKey:     requestKey,
 		TokenID:        tokenID,
@@ -117,7 +118,7 @@ func (c *Cache) Insert(requestKey, tokenID string, data []byte) error {
 	}
 
 	if err := txn.Insert("indexer", index); err != nil {
-		return fmt.Errorf("unable to insert data into the cache: %v", err)
+		return fmt.Errorf("unable to insert data into  cache: %v", err)
 	}
 
 	txn.Commit()
@@ -128,5 +129,19 @@ func (c *Cache) Insert(requestKey, tokenID string, data []byte) error {
 // Remove deletes entry from the TokenCache submap. If the TokenCache is empty, it will also delete the
 // entry from the Cache object.
 func (c *Cache) Remove(tokenID, requestKey string) error {
+	index, err := c.Get(tokenID, requestKey)
+	if err != nil {
+		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
+	}
+
+	txn := c.cache.Txn(true)
+	defer txn.Abort()
+
+	if err := txn.Delete("indexer", index); err != nil {
+		return fmt.Errorf("unable to delete data from cache: %v", err)
+	}
+
+	txn.Commit()
+
 	return nil
 }

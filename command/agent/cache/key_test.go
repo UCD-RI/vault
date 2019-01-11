@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestParseRequestKey(t *testing.T) {
+func TestComputeRequestKey(t *testing.T) {
 	type args struct {
 		req *http.Request
 	}
@@ -26,19 +26,19 @@ func TestParseRequestKey(t *testing.T) {
 					},
 				},
 			},
-			[]byte{202, 161, 193, 171, 22, 115, 187, 213, 107, 94, 211, 203, 48, 158, 80, 4, 88, 107, 161, 44, 32, 239, 155, 25, 165, 68, 189, 6, 63, 216, 65, 27},
+			[]byte{46, 220, 126, 150, 92, 62, 27, 220, 227, 177, 213, 247, 154, 82, 146, 120, 66, 86, 156, 7, 52, 168, 101, 68, 210, 34, 117, 63, 17, 174, 72, 71},
 			false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseRequestKey(tt.args.req)
+			got, err := ComputeCacheKey(tt.args.req)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseRequestKey() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ParseRequestKey() = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(got, string(tt.want)) {
+				t.Errorf("ParseRequestKey() = %v, want %v", got, string(tt.want))
 			}
 		})
 	}

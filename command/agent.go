@@ -1,6 +1,8 @@
 package command
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -362,7 +364,7 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Initialize cache and indexer
-	proxyCache, err := cache.NewCache()
+	proxyCache, err := cache.New()
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
@@ -456,12 +458,37 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 			return
 		}
 		if data != nil {
-			fmt.Println("got cached request!")
+			fmt.Println("========= got cached request!")
 			fmt.Println(string(data.Data))
+
+			// Deserialize the response
+			ioReader := bytes.NewReader(data.Data)
+			reader := bufio.NewReader(ioReader)
+			resp, err := http.ReadResponse(reader, nil)
+			if err != nil {
+				fmt.Println("unable to deserialize cached response")
+				w.WriteHeader(400)
+				return
+			}
+			if resp != nil {
+				defer resp.Body.Close()
+			}
+
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				fmt.Println("unable to read cached response body")
+				w.WriteHeader(400)
+				return
+			}
+
+			copyHeader(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			w.Write(body)
+
 			return
 		}
 
-		fmt.Println("forwarding request...")
+		fmt.Println("========= forwarding request...")
 
 		// Secret is not present in the cache. Forward the request to Vault.
 		fwReq := client.NewRequest(r.Method, r.URL.Path)
@@ -487,19 +514,36 @@ func handleRequest(client *api.Client, proxyCache *cache.Cache) http.Handler {
 			return
 		}
 
+		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println("unable to read response body:", err)
+			w.WriteHeader(400)
+			return
+		}
+
+		// Reset response body
+		resp.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		// Serialze the reponse
+		var respBytes bytes.Buffer
+		if err := resp.Write(&respBytes); err != nil {
+			w.WriteHeader(400)
+			return
+		}
+
+		fmt.Println("===== response:", string(respBytes.Bytes()))
+
 		// Cache the response
 		// TODO: Cache the actual body
-		if err := proxyCache.Insert(cacheKey, client.Token(), nil); err != nil {
+		if err := proxyCache.Insert(cacheKey, client.Token(), respBytes.Bytes()); err != nil {
 			fmt.Println("could not insert into cache", err)
 			return
 		}
 
 		// Write the forwarded response to the response writer
-		// TODO: Return an actual response
-
-		// copyHeader(w.Header(), header)
-		// w.WriteHeader(status)
-		// w.Write()
+		copyHeader(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		w.Write(bodyBytes)
 
 		return
 	})

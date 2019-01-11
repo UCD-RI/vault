@@ -10,15 +10,15 @@ import (
 
 // Index holds all the data for a particular lease or request path.
 type Index struct {
-	// RequestKey is a hashed key derived from the request.
-	RequestKey string
+	// CacheKey is a hashed key derived from the request.
+	CacheKey string
 
-	// TrackedKey can be a lease ID, token ID, or request path.
-	TrackedKey string
+	// Key can be a lease ID, token ID, or request path.
+	Key string
 
-	// TrackedKeyType is the type of key that's be tracked. It can be lease_id, token_id,
+	// KeyType is the type of key that's be tracked. It can be lease_id, token_id,
 	// or request_path.
-	TrackedKeyType string
+	KeyType string
 
 	// TokenID is the token used for this request.
 	TokenID string
@@ -48,7 +48,7 @@ func New() (*Cache, error) {
 						Name:   "id",
 						Unique: true,
 						Indexer: &memdb.StringFieldIndex{
-							Field: "RequestKey",
+							Field: "CacheKey",
 						},
 					},
 					"tracked_key": &memdb.IndexSchema{
@@ -57,10 +57,10 @@ func New() (*Cache, error) {
 						Indexer: &memdb.CompoundIndex{
 							Indexes: []memdb.Indexer{
 								&memdb.StringFieldIndex{
-									Field: "TrackedKey",
+									Field: "Key",
 								},
 								&memdb.StringFieldIndex{
-									Field: "TrackedKeyType",
+									Field: "KeyType",
 								},
 							},
 						},
@@ -80,12 +80,12 @@ func New() (*Cache, error) {
 	}, nil
 }
 
-// Get retrieves the cached data by tokenID and requestKey.
-func (c *Cache) Get(tokenID, requestKey string) (*Index, error) {
+// Get retrieves the cached data by tokenID and cacheKey.
+func (c *Cache) Get(tokenID, cacheKey string) (*Index, error) {
 	txn := c.cache.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First("indexer", "id", requestKey)
+	raw, err := txn.First("indexer", "id", cacheKey)
 	if err != nil {
 		return nil, err
 	}
@@ -104,17 +104,17 @@ func (c *Cache) Get(tokenID, requestKey string) (*Index, error) {
 
 // Insert adds an entry in to the submap. It takes the two indexes, tokenID and
 // requetKey, and stores the CachedData in the proper location.
-func (c *Cache) Insert(requestKey, tokenID string, data []byte) error {
+func (c *Cache) Insert(cacheKey, tokenID string, data []byte) error {
 	txn := c.cache.Txn(true)
 	defer txn.Abort()
 
-	// TODO: Properly set TrackedKey and TrackedKeyType
+	// TODO: Properly set Key and KeyType
 	index := &Index{
-		RequestKey:     requestKey,
-		TokenID:        tokenID,
-		Data:           data,
-		TrackedKey:     "foo",
-		TrackedKeyType: "lease_id",
+		CacheKey: cacheKey,
+		TokenID:  tokenID,
+		Data:     data,
+		Key:      "foo",
+		KeyType:  "lease_id",
 	}
 
 	if err := txn.Insert("indexer", index); err != nil {
@@ -128,8 +128,8 @@ func (c *Cache) Insert(requestKey, tokenID string, data []byte) error {
 
 // Remove deletes entry from the TokenCache submap. If the TokenCache is empty, it will also delete the
 // entry from the Cache object.
-func (c *Cache) Remove(tokenID, requestKey string) error {
-	index, err := c.Get(tokenID, requestKey)
+func (c *Cache) Remove(tokenID, cacheKey string) error {
+	index, err := c.Get(tokenID, cacheKey)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
 	}

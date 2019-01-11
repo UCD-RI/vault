@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestComputeRequestKey(t *testing.T) {
+func TestComputeCacheKey(t *testing.T) {
 	type args struct {
 		req *http.Request
 	}
@@ -34,11 +34,11 @@ func TestComputeRequestKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ComputeCacheKey(tt.args.req)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseRequestKey() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ComputeCacheKey() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, string(tt.want)) {
-				t.Errorf("ParseRequestKey() = %v, want %v", got, string(tt.want))
+				t.Errorf("ComputeCacheKey() = %v, want %v", got, string(tt.want))
 			}
 		})
 	}

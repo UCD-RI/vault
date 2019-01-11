@@ -27,17 +27,17 @@ type Index struct {
 	// cache invalidation to stop renewals.
 	Context context.Context
 
-	// Data is the byte representation of the response that we're caching
-	Data []byte
+	// Response is the byte representation of the response that we're caching
+	Response []byte
 }
 
-// Cache is the overaching cache object that holds the caehed response data
-// grouped by token ID.
+// Cache is the overaching cache object that holds the cached response along
+// with a coulple of indexes.
 type Cache struct {
 	cache *memdb.MemDB
 }
 
-// New creates a new cache map object.
+// New creates a new cache object
 func New() (*Cache, error) {
 	cacheSchema := &memdb.DBSchema{
 		Tables: map[string]*memdb.TableSchema{
@@ -51,8 +51,8 @@ func New() (*Cache, error) {
 							Field: "CacheKey",
 						},
 					},
-					"tracked_key": &memdb.IndexSchema{
-						Name:   "tracked_key",
+					"key": &memdb.IndexSchema{
+						Name:   "key",
 						Unique: true,
 						Indexer: &memdb.CompoundIndex{
 							Indexes: []memdb.Indexer{
@@ -80,7 +80,7 @@ func New() (*Cache, error) {
 	}, nil
 }
 
-// Get retrieves the cached data by tokenID and cacheKey.
+// Get retrieves the cached object by tokenID and cacheKey.
 func (c *Cache) Get(tokenID, cacheKey string) (*Index, error) {
 	txn := c.cache.Txn(false)
 	defer txn.Abort()
@@ -94,17 +94,16 @@ func (c *Cache) Get(tokenID, cacheKey string) (*Index, error) {
 		return nil, nil
 	}
 
-	data, ok := raw.(*Index)
+	index, ok := raw.(*Index)
 	if !ok {
 		return nil, errors.New("unable to parse index value from the cache")
 	}
 
-	return data, nil
+	return index, nil
 }
 
-// Insert adds an entry in to the submap. It takes the two indexes, tokenID and
-// requetKey, and stores the CachedData in the proper location.
-func (c *Cache) Insert(cacheKey, tokenID string, data []byte) error {
+// Insert adds an index object into the cache
+func (c *Cache) Insert(cacheKey, tokenID string, response []byte) error {
 	txn := c.cache.Txn(true)
 	defer txn.Abort()
 
@@ -112,13 +111,13 @@ func (c *Cache) Insert(cacheKey, tokenID string, data []byte) error {
 	index := &Index{
 		CacheKey: cacheKey,
 		TokenID:  tokenID,
-		Data:     data,
+		Response: response,
 		Key:      "foo",
 		KeyType:  "lease_id",
 	}
 
 	if err := txn.Insert("indexer", index); err != nil {
-		return fmt.Errorf("unable to insert data into  cache: %v", err)
+		return fmt.Errorf("unable to insert index into cache: %v", err)
 	}
 
 	txn.Commit()
@@ -138,7 +137,7 @@ func (c *Cache) Remove(tokenID, cacheKey string) error {
 	defer txn.Abort()
 
 	if err := txn.Delete("indexer", index); err != nil {
-		return fmt.Errorf("unable to delete data from cache: %v", err)
+		return fmt.Errorf("unable to delete index from cache: %v", err)
 	}
 
 	txn.Commit()

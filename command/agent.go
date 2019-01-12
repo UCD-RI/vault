@@ -364,7 +364,10 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Initialize cache and indexer
-	cache, err := cache.New()
+	conf := &cache.Config{
+		Logger: c.logger.Named("cache"),
+	}
+	cache, err := cache.New(conf)
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
@@ -442,7 +445,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 
 func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("req: %#v\n", r)
+		fmt.Printf("===== req: %#v\n", r)
 
 		// Read the body out and reset the request body. This is to ensure that
 		// body can still be read while forwarding the request below.
@@ -567,9 +570,25 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 
 		fmt.Println("===== response:", string(respBytes.Bytes()))
 
+		// Build the index to cache based on the response received
+		index = &cache.Index{
+			CacheKey: cacheKey,
+			TokenID:  client.Token(),
+			Response: respBytes.Bytes(),
+		}
+
+		if secret.LeaseID != "" {
+			index.Key = secret.LeaseID
+			index.KeyType = "lease_id"
+		}
+
+		if secret.Auth != nil {
+			index.Key = secret.Auth.ClientToken
+			index.KeyType = "token_id"
+		}
+
 		// Cache the response
-		// TODO: Cache the actual body
-		if err := db.Insert(cacheKey, client.Token(), respBytes.Bytes()); err != nil {
+		if err := db.Insert(index); err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
 			return
 		}
@@ -597,14 +616,49 @@ func copyHeader(dst, src http.Header) {
 
 func handleCacheClear(db *cache.Cache) http.Handler {
 	type request struct {
-		Type string `json:"type"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
 	}
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		req := new(request)
 
 		err := jsonutil.DecodeJSONFromReader(r.Body, req)
 		if err != nil && err != io.EOF {
+			w.WriteHeader(400)
+			return
+		}
+
+		switch req.Type {
+		// TODO: token_id and lease_id should have different eviction logic
+		case "token_id", "lease_id":
+			index, err := db.GetByType(req.Value, req.Type)
+			if err != nil {
+				return
+			}
+			if index == nil {
+				fmt.Println("=== index not found")
+				w.WriteHeader(500)
+				return
+			}
+
+			fmt.Println("==== cleared cache by lease_id")
+			err = db.DeleteByIndex(index)
+			if err != nil {
+				fmt.Println("==== unable to delete cache")
+				return
+			}
+		case "request_path":
+			err := db.DeleteByPrefix(req.Type, req.Value)
+			if err != nil {
+				fmt.Println("==== unable to delete by request_path")
+				return
+			}
+		case "all":
+			if err := db.Reset(); err != nil {
+				w.WriteHeader(500)
+				return
+			}
+		default:
 			w.WriteHeader(400)
 			return
 		}

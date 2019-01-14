@@ -47,7 +47,9 @@ type Config struct {
 // New creates a new cache object
 func New(conf *Config) (*Cache, error) {
 	db, err := newDB()
-	return nil, err
+	if err != nil {
+		return nil, err
+	}
 
 	return &Cache{
 		cache:  db,

@@ -20,6 +20,7 @@ import (
 
 	"github.com/kr/pretty"
 	"github.com/mitchellh/cli"
+	"github.com/pkg/errors"
 	"github.com/posener/complete"
 
 	"github.com/hashicorp/errwrap"
@@ -636,32 +637,32 @@ func handleCacheClear(db *cache.Cache) http.Handler {
 				return
 			}
 			if index == nil {
-				fmt.Println("=== index not found")
-				w.WriteHeader(500)
+				respondError(w, http.StatusInternalServerError, errors.New("Index not found"))
 				return
 			}
 
 			fmt.Println("==== cleared cache by lease_id")
 			err = db.DeleteByIndex(index)
 			if err != nil {
-				fmt.Println("==== unable to delete cache")
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete cache by index: {{err}}", err))
 				return
 			}
 		case "request_path":
 			err := db.DeleteByPrefix(req.Type, req.Value)
 			if err != nil {
-				fmt.Println("==== unable to delete by request_path")
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete by request_path: {{err}}", err))
 				return
 			}
 		case "all":
 			if err := db.Reset(); err != nil {
-				w.WriteHeader(500)
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
 				return
 			}
 		default:
-			w.WriteHeader(400)
+			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
 			return
 		}
+		// We've successfully cleared the cache
 		return
 	})
 }

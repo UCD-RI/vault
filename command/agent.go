@@ -377,7 +377,7 @@ func (c *AgentCommand) Run(args []string) int {
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
 		mux.Handle("/v1/agent/cache-clear", handleCacheClear(cache))
-		mux.Handle("/", handleRequest(client, cache))
+		mux.Handle("/", handleRequest(ctx, c.logger, client, cache))
 		go http.Serve(ln, mux)
 	}
 
@@ -444,7 +444,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
+func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db *cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
 
@@ -518,7 +518,7 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 		fwReq.SetJSONBody(out)
 
 		// Create a context for the forwarding request
-		ctx, cancelFunc := context.WithCancel(context.Background())
+		ctx, cancelFunc := context.WithCancel(ctx)
 		defer cancelFunc()
 
 		resp, err := client.RawRequestWithContext(ctx, fwReq)
@@ -554,12 +554,36 @@ func handleRequest(client *api.Client, db *cache.Cache) http.Handler {
 			return
 		}
 
-		// Handle response renewals
-		err = handleSecret(secret)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to handle secret: {{err}}", err))
-			return
+		renewCtx, renewCancelFunc := context.WithCancel(ctx)
+		defer renewCancelFunc()
+
+		renewSecret := func(ctx context.Context, secret *api.Secret) {
+			renewer, err := client.NewRenewer(&api.RenewerInput{
+				Secret: secret,
+			})
+			if err != nil {
+				logger.Error("failed to create renewer", "error", err)
+				return
+			}
+			go renewer.Renew()
+			defer renewer.Stop()
+
+			select {
+			case <-ctx.Done():
+				return
+			case err := <-renewer.DoneCh():
+				if err != nil {
+					logger.Error("failed to renew secret", "error", err)
+					return
+				}
+				return
+			case renewal := <-renewer.RenewCh():
+				fmt.Printf("renewal: %#v\n", renewal)
+				// TODO: Update cache
+			}
 		}
+
+		go renewSecret(renewCtx, secret)
 
 		// Serialze the reponse to persist in cache
 		var respBytes bytes.Buffer

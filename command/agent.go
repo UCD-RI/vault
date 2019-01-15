@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -458,7 +459,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
 
 		// Compute the cache key to perform a lookup in the cache
-		cacheKey, err := cache.ComputeCacheKey(r)
+		cacheKey, err := computeCacheKey(r)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
 			return
@@ -1019,4 +1020,19 @@ func respondOk(w http.ResponseWriter, body interface{}) {
 		enc := json.NewEncoder(w)
 		enc.Encode(body)
 	}
+}
+
+// computeCacheKey results in a value that uniquely identifies a request
+// received by the agent. It does so by SHA256 hashing the marshalled JSON
+// which contains the request path, query parameters and body parameters.
+func computeCacheKey(req *http.Request) (string, error) {
+	var b bytes.Buffer
+
+	// Serialze the request
+	if err := req.Write(&b); err != nil {
+		return "", fmt.Errorf("unable to serialize request: %v", err)
+	}
+
+	sum := sha256.Sum256(b.Bytes())
+	return string(sum[:]), nil
 }

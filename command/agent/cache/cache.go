@@ -41,15 +41,25 @@ type Index struct {
 	// index. This is computed by serializing and hashing the response object.
 	CacheKey string
 
-	// Key is a pointer that is used to refer back to this index. There can
-	// be two types of keys: request_path or lease_id.
-	Key string
+	// LeaseID is the identifier of the lease in Vault, that belongs to the
+	// response held by this index
+	LeaseID string
 
-	// KeyType represents the type of the value held by the Key field. This
-	// can be `request_path` or `lease_id`.
-	KeyType string
+	// RequestPath is the path of the request that resulted in the response
+	// held by this index
+	RequestPath string
 
-	// TokenID is the token used to fetch the response from Vault
+	/*
+		// Key is a pointer that is used to refer back to this index. There can
+		// be two types of keys: request_path or lease_id.
+		Key string
+
+		// KeyType represents the type of the value held by the Key field. This
+		// can be `request_path` or `lease_id`.
+		KeyType string
+	*/
+
+	// TokenID is the token fetched the response held by this index
 	TokenID string
 
 	// Context is the context object for a goroutine that manages the renewal
@@ -58,12 +68,14 @@ type Index struct {
 	Context context.Context
 }
 
-// Config represents configuration options for cache object creation
+// Config represents configuration options for creating the cache
 type Config struct {
 	Logger    hclog.Logger
 	CacheType CacheType
 }
 
+// New creates a cache object based on the cache type present in the supplied
+// configuration
 func New(config *Config) (Cache, error) {
 	switch config.CacheType {
 	case CacheTypeMemDB:

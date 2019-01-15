@@ -84,20 +84,45 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "CacheKey",
 						},
 					},
-					"key": &memdb.IndexSchema{
-						Name:   "key",
-						Unique: true,
-						Indexer: &memdb.CompoundIndex{
-							Indexes: []memdb.Indexer{
-								&memdb.StringFieldIndex{
-									Field: "KeyType",
-								},
-								&memdb.StringFieldIndex{
-									Field: "Key",
+					"token_id": &memdb.IndexSchema{
+						Name:   "token_id",
+						Unique: false,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "TokenID",
+						},
+					},
+					"request_path": &memdb.IndexSchema{
+						Name:   "request_path",
+						Unique: false,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "RequestPath",
+						},
+					},
+					"lease_id": &memdb.IndexSchema{
+						Name:         "lease_id",
+						Unique:       true,
+						AllowMissing: true,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "LeaseID",
+						},
+					},
+
+					/*
+						"key": &memdb.IndexSchema{
+							Name:   "key",
+							Unique: true,
+							Indexer: &memdb.CompoundIndex{
+								Indexes: []memdb.Indexer{
+									&memdb.StringFieldIndex{
+										Field: "KeyType",
+									},
+									&memdb.StringFieldIndex{
+										Field: "Key",
+									},
 								},
 							},
 						},
-					},
+					*/
 				},
 			},
 		},

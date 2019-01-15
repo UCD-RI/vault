@@ -18,10 +18,10 @@ type Cache interface {
 	Set(index *Index) error
 
 	// Get returns the index based on the index type and the index values
-	Get(indexName string, values ...string) (*Index, error)
+	Get(indexName string, indexValue string) (*Index, error)
 
 	// Evict removes an index based on the index type and the index values
-	Evict(indexName string, values ...string) error
+	Evict(indexName string, indexValue string) error
 
 	// EvictByPrefix removes one or more indexes from the cache based on the
 	// index name and the prefix of the index value.
@@ -49,16 +49,6 @@ type Index struct {
 	// held by this index
 	RequestPath string
 
-	/*
-		// Key is a pointer that is used to refer back to this index. There can
-		// be two types of keys: request_path or lease_id.
-		Key string
-
-		// KeyType represents the type of the value held by the Key field. This
-		// can be `request_path` or `lease_id`.
-		KeyType string
-	*/
-
 	// TokenID is the token fetched the response held by this index
 	TokenID string
 
@@ -66,6 +56,9 @@ type Index struct {
 	// of the secret that belongs to the response in this index. This context
 	// is used to stop the renewal process during cache invalidations.
 	Context context.Context
+
+	// ID is the identifier for the index
+	ID string
 }
 
 // Config represents configuration options for creating the cache

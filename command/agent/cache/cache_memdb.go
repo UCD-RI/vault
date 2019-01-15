@@ -81,6 +81,13 @@ func newDB() (*memdb.MemDB, error) {
 						Name:   "id",
 						Unique: true,
 						Indexer: &memdb.StringFieldIndex{
+							Field: "ID",
+						},
+					},
+					"cache_key": &memdb.IndexSchema{
+						Name:   "cache_key",
+						Unique: true,
+						Indexer: &memdb.StringFieldIndex{
 							Field: "CacheKey",
 						},
 					},
@@ -106,23 +113,6 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "LeaseID",
 						},
 					},
-
-					/*
-						"key": &memdb.IndexSchema{
-							Name:   "key",
-							Unique: true,
-							Indexer: &memdb.CompoundIndex{
-								Indexes: []memdb.Indexer{
-									&memdb.StringFieldIndex{
-										Field: "KeyType",
-									},
-									&memdb.StringFieldIndex{
-										Field: "Key",
-									},
-								},
-							},
-						},
-					*/
 				},
 			},
 		},
@@ -135,7 +125,7 @@ func newDB() (*memdb.MemDB, error) {
 	return db, nil
 }
 
-func (c *CacheMemDB) Get(iName string, values ...string) (*Index, error) {
+func (c *CacheMemDB) Get(iName string, indexValue string) (*Index, error) {
 	in := indexName(iName)
 	if in == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", iName)
@@ -144,7 +134,7 @@ func (c *CacheMemDB) Get(iName string, values ...string) (*Index, error) {
 	txn := c.db.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First("indexer", "id", values[0])
+	raw, err := txn.First("indexer", iName, indexValue)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +164,8 @@ func (c *CacheMemDB) Set(index *Index) error {
 	return nil
 }
 
-func (c *CacheMemDB) Evict(indexName string, values ...string) error {
-	index, err := c.Get(indexName, values...)
+func (c *CacheMemDB) Evict(iName string, indexValue string) error {
+	index, err := c.Get(iName, indexValue)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
 	}
@@ -206,39 +196,15 @@ func (c *CacheMemDB) Flush() error {
 	return nil
 }
 
-func (c *CacheMemDB) EvictByPrefix(keyType, prefix string) error {
+func (c *CacheMemDB) EvictByPrefix(iName, indexPrefix string) error {
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	lookupPrefix := prefix + "_prefix"
-	_, err := txn.DeleteAll("indexer", "key", keyType, lookupPrefix)
+	lookupPrefix := indexPrefix + "_prefix"
+	_, err := txn.DeleteAll("indexer", iName, lookupPrefix)
 	if err != nil {
-		return fmt.Errorf("unable to delete cache indexes for prefix %q: %v", prefix, err)
+		return fmt.Errorf("unable to delete cache indexes for prefix %q: %v", indexPrefix, err)
 	}
 
 	return nil
 }
-
-/*
-// GetByType returns the first found cached index of the specified key type.
-func (c *CacheMemDB) GetByType(key, keyType string) (*Index, error) {
-	txn := c.db.Txn(false)
-	defer txn.Abort()
-
-	raw, err := txn.First("indexer", "key", keyType, key)
-	if err != nil {
-		return nil, err
-	}
-
-	if raw == nil {
-		return nil, nil
-	}
-
-	index, ok := raw.(*Index)
-	if !ok {
-		return nil, errors.New("unable to parse index value from the cache")
-	}
-
-	return index, nil
-}
-*/

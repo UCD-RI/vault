@@ -368,7 +368,7 @@ func (c *AgentCommand) Run(args []string) int {
 	conf := &cache.Config{
 		Logger: c.logger.Named("cache"),
 	}
-	cache, err := cache.New(conf)
+	db, err := cache.New(conf)
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
@@ -376,8 +376,8 @@ func (c *AgentCommand) Run(args []string) int {
 
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
-		mux.Handle("/v1/agent/cache-clear", handleCacheClear(cache))
-		mux.Handle("/", handleRequest(ctx, c.logger, client, cache))
+		mux.Handle("/v1/agent/cache-clear", handleCacheClear(db))
+		mux.Handle("/", handleRequest(ctx, c.logger, client, db))
 		go http.Serve(ln, mux)
 	}
 
@@ -448,8 +448,8 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
 
-		// Read the body out and reset the request body. This is to ensure that
-		// body can still be read while forwarding the request below.
+		// Read the body out and reset the request body. This is so that body
+		// can still be read while forwarding the request.
 		reqBody, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read request body: {{err}}", err))
@@ -486,7 +486,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 				return
 			}
 
-			// Read the response body and return it to the client
+			// Read the response body and return it
 			body, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
 				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
@@ -516,10 +516,6 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 			return
 		}
 		fwReq.SetJSONBody(out)
-
-		// Create a context for the forwarding request
-		ctx, cancelFunc := context.WithCancel(ctx)
-		defer cancelFunc()
 
 		resp, err := client.RawRequestWithContext(ctx, fwReq)
 		if resp != nil {
@@ -554,46 +550,16 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 			return
 		}
 
-		renewCtx, renewCancelFunc := context.WithCancel(ctx)
-		defer renewCancelFunc()
-
-		renewSecret := func(ctx context.Context, secret *api.Secret) {
-			renewer, err := client.NewRenewer(&api.RenewerInput{
-				Secret: secret,
-			})
-			if err != nil {
-				logger.Error("failed to create renewer", "error", err)
-				return
-			}
-			go renewer.Renew()
-			defer renewer.Stop()
-
-			select {
-			case <-ctx.Done():
-				return
-			case err := <-renewer.DoneCh():
-				if err != nil {
-					logger.Error("failed to renew secret", "error", err)
-					return
-				}
-				return
-			case renewal := <-renewer.RenewCh():
-				fmt.Printf("renewal: %#v\n", renewal)
-				// TODO: Update cache
-			}
-		}
-
-		go renewSecret(renewCtx, secret)
-
 		// Serialze the reponse to persist in cache
 		var respBytes bytes.Buffer
 		err = resp.Write(&respBytes)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to serialize response body: {{err}}", err))
 			return
 		}
 
 		fmt.Println("===== response:", string(respBytes.Bytes()))
+		time.Sleep(5 * time.Second)
 
 		// Build the index to cache based on the response received
 		index = &cache.Index{
@@ -612,11 +578,17 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 			index.KeyType = "token_id"
 		}
 
+		// Create a context for the secret renewal
+		renewCtx := context.WithValue(ctx, "key", cacheKey)
+		index.Context = renewCtx
+
 		// Cache the response
 		if err := db.Insert(index); err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
 			return
 		}
+
+		go handleSecret(renewCtx, client, secret, db, cacheKey, logger)
 
 		// Write the forwarded response to the response writer
 		copyHeader(w.Header(), resp.Header)
@@ -626,9 +598,96 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 	})
 }
 
-func handleSecret(secret *api.Secret) error {
-	fmt.Printf("handleSecret: secret: %#v\n", secret)
-	return nil
+func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, db *cache.Cache, cacheKey string, logger log.Logger) {
+	fmt.Printf("===== handleSecret: secret.Auth: %#v\n", secret.Auth)
+
+	// Compute the TTL for the secret
+	// TODO: Add backoffs with jitter
+
+	renewSecret := func(ctx context.Context, secret *api.Secret) {
+		renewer, err := client.NewRenewer(&api.RenewerInput{
+			Secret: secret,
+		})
+		if err != nil {
+			logger.Error("failed to create renewer", "error", err)
+			return
+		}
+		logger.Info("invoking renewer")
+		fmt.Printf("===== invoking renewer\n")
+		go renewer.Renew()
+
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("shutdown triggered, stopping renewer")
+				renewer.Stop()
+				return
+			case err := <-renewer.DoneCh():
+				if err != nil {
+					logger.Error("failed to renew secret", "error", err)
+					return
+				}
+				return
+			case renewal := <-renewer.RenewCh():
+				fmt.Printf("===== successful renewal: %#v\n", renewal.Secret.Auth)
+				// Marshal the renewed secret
+				secretBytes, err := json.Marshal(renewal.Secret)
+				if err != nil {
+					logger.Error("failed to JSON marshal renewed secret", "error", err)
+					return
+				}
+
+				// Find the cached response
+				index, err := db.Get(client.Token(), cacheKey)
+				if err != nil {
+					logger.Error("failed to get cached response", "error", err)
+					return
+				}
+
+				if index == nil {
+					logger.Error("nil index in cache", "cache_key", cacheKey)
+					return
+				}
+				reader := bufio.NewReader(bytes.NewReader(index.Response))
+
+				// Deserialize the cached response
+				resp, err := http.ReadResponse(reader, nil)
+				if resp != nil {
+					// TODO: This should not be a defer
+					defer resp.Body.Close()
+				}
+				if err != nil {
+					logger.Error("failed to read cached response", "error", err)
+					return
+				}
+
+				// Replace the cached response's body with the renewed secret
+				resp.Body = ioutil.NopCloser(bytes.NewBuffer(secretBytes))
+				resp.ContentLength = int64(len(secretBytes))
+
+				var respBytes bytes.Buffer
+				err = resp.Write(&respBytes)
+				if err != nil {
+					logger.Error("failed to serialize response body", "error", err)
+					return
+				}
+
+				index.Response = respBytes.Bytes()
+
+				// TODO: Update the "Date" header to reflect the new response
+				// time
+				fmt.Println("===== updated response:", string(respBytes.Bytes()))
+
+				err = db.Insert(index)
+				if err != nil {
+					logger.Error("failed to update cache index", "error", err)
+					return
+				}
+			}
+		}
+	}
+
+	go renewSecret(ctx, secret)
 }
 
 func copyHeader(dst, src http.Header) {

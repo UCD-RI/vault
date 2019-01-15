@@ -188,7 +188,7 @@ auto_auth {
 	}
 }
 
-func TestComputeIndexID(t *testing.T) {
+func TestComputeCacheKey(t *testing.T) {
 	type args struct {
 		req *http.Request
 	}
@@ -213,13 +213,13 @@ func TestComputeIndexID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := computeIndexID(tt.args.req)
+			got, err := computeCacheKey(tt.args.req)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("computeIndexID() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("computeCacheKey() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, string(tt.want)) {
-				t.Errorf("computeIndexID() = %v, want %v", got, string(tt.want))
+				t.Errorf("computeCacheKey() = %v, want %v", got, string(tt.want))
 			}
 		})
 	}

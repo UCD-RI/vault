@@ -25,7 +25,6 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
-	uuid "github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
@@ -37,10 +36,10 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
 	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/command/agent/config"
+	"github.com/hashicorp/vault/command/agent/proxy"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
-	"github.com/hashicorp/vault/helper/jsonutil"
 	"github.com/hashicorp/vault/helper/logging"
 	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
@@ -367,6 +366,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 	// Create the cache
 	db, err := cache.New(&cache.Config{
+		Proxier:   proxy.NewForwardProxier(),
 		CacheType: cache.CacheTypeMemDB,
 		Logger:    c.logger.Named("cache"),
 	})
@@ -375,10 +375,12 @@ func (c *AgentCommand) Run(args []string) int {
 		return 1
 	}
 
+	proxier := db.(proxy.Proxier)
+
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
-		mux.Handle("/v1/agent/cache-clear", handleCacheClear(db))
-		mux.Handle("/", handleRequest(ctx, c.logger, client, db))
+		mux.Handle("/v1/agent/cache-clear", handleCacheClear(proxier))
+		mux.Handle("/", handleRequest(ctx, c.logger, client, proxier))
 		go http.Serve(ln, mux)
 	}
 
@@ -445,7 +447,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db cache.Cache) http.Handler {
+func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, proxier proxy.Proxier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
 
@@ -465,138 +467,146 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 			return
 		}
 
-		// Check if the response for this request is already in the cache
-		index, err := db.Get("cache_key", cacheKey)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
-			return
-		}
-		if index != nil {
-			// Cached request is found
-			fmt.Println("========= got cached request!")
-			fmt.Println(string(index.Response))
+		proxier.Send(&proxy.Request{
+			CacheKey: cacheKey,
+			TokenID:  client.Token(),
+			Request:  r,
+		})
 
-			// Deserialize the response
-			reader := bufio.NewReader(bytes.NewReader(index.Response))
-			resp, err := http.ReadResponse(reader, nil)
+		/*
+			// Check if the response for this request is already in the cache
+			index, err := db.Get("cache_key", cacheKey)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
+				return
+			}
+			if index != nil {
+				// Cached request is found
+				fmt.Println("========= got cached request!")
+				fmt.Println(string(index.Response))
+
+				// Deserialize the response
+				reader := bufio.NewReader(bytes.NewReader(index.Response))
+				resp, err := http.ReadResponse(reader, nil)
+				if resp != nil {
+					defer resp.Body.Close()
+				}
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to deserialize cached response: {{err}}", err))
+					return
+				}
+
+				// Read the response body and return it
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
+					return
+				}
+
+				copyHeader(w.Header(), resp.Header)
+				w.WriteHeader(resp.StatusCode)
+				w.Write(body)
+
+				return
+			}
+
+			//
+			// Secret is not present in the cache. Forward the request to Vault.
+			//
+			fmt.Println("========= forwarding request...")
+
+			// Create a new API request to forward the request to Vault
+			fwReq := client.NewRequest(r.Method, r.URL.Path)
+
+			// Deserialize the request and set the body for the API request
+			var out map[string]interface{}
+			err = jsonutil.DecodeJSONFromReader(bytes.NewReader(reqBody), &out)
+			if err != nil && err != io.EOF {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
+				return
+			}
+			fwReq.SetJSONBody(out)
+
+			resp, err := client.RawRequestWithContext(ctx, fwReq)
 			if resp != nil {
 				defer resp.Body.Close()
 			}
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to deserialize cached response: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to forward request to Vault: {{err}}", err))
 				return
 			}
 
-			// Read the response body and return it
+			// Read the body out and reset the response body. The read out body
+			// will be returned to the client.
 			body, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
+				return
+			}
+			resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+
+			secret, err := api.ParseSecret(bytes.NewReader(body))
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to parse secret from response: {{err}}", err))
 				return
 			}
 
-			copyHeader(w.Header(), resp.Header)
-			w.WriteHeader(resp.StatusCode)
-			w.Write(body)
+			// Fast path if the response is not cacheable
+			if secret.Auth == nil && secret.LeaseID == "" {
+				// Write the forwarded response to the response writer
+				copyHeader(w.Header(), resp.Header)
+				w.WriteHeader(resp.StatusCode)
+				w.Write(body)
+				return
+			}
 
-			return
-		}
+			// Serialze the reponse to persist in cache
+			var respBytes bytes.Buffer
+			err = resp.Write(&respBytes)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to serialize response body: {{err}}", err))
+				return
+			}
 
-		//
-		// Secret is not present in the cache. Forward the request to Vault.
-		//
-		fmt.Println("========= forwarding request...")
+			fmt.Println("===== response:", string(respBytes.Bytes()))
 
-		// Create a new API request to forward the request to Vault
-		fwReq := client.NewRequest(r.Method, r.URL.Path)
+			indexID, err := uuid.GenerateUUID()
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to generate index id: {{err}}", err))
+				return
+			}
 
-		// Deserialize the request and set the body for the API request
-		var out map[string]interface{}
-		err = jsonutil.DecodeJSONFromReader(bytes.NewReader(reqBody), &out)
-		if err != nil && err != io.EOF {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
-			return
-		}
-		fwReq.SetJSONBody(out)
+			// Build the index to cache based on the response received
+			index = &cache.Index{
+				// TODO: Check if you can get rid of the ID field
+				ID:          indexID,
+				CacheKey:    cacheKey,
+				LeaseID:     secret.LeaseID,
+				TokenID:     client.Token(),
+				RequestPath: r.RequestURI,
+				Response:    respBytes.Bytes(),
+			}
 
-		resp, err := client.RawRequestWithContext(ctx, fwReq)
-		if resp != nil {
-			defer resp.Body.Close()
-		}
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to forward request to Vault: {{err}}", err))
-			return
-		}
+			// Create a context for the secret renewal
+			// TODO: Not sure what to put in as value. The goal is only to derive a
+			// renewal specific context and nothing else. The value probably won't
+			// be used at all.
+			renewCtx := context.WithValue(ctx, "key", cacheKey)
+			index.Context = renewCtx
 
-		// Read the body out and reset the response body. The read out body
-		// will be returned to the client.
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-			return
-		}
-		resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+			// Cache the response
+			if err := db.Set(index); err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
+				return
+			}
 
-		secret, err := api.ParseSecret(bytes.NewReader(body))
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to parse secret from response: {{err}}", err))
-			return
-		}
+			go handleSecret(renewCtx, client, secret, db, cacheKey, logger)
 
-		// Fast path if the response is not cacheable
-		if secret.Auth == nil && secret.LeaseID == "" {
 			// Write the forwarded response to the response writer
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			w.Write(body)
-			return
-		}
-
-		// Serialze the reponse to persist in cache
-		var respBytes bytes.Buffer
-		err = resp.Write(&respBytes)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to serialize response body: {{err}}", err))
-			return
-		}
-
-		fmt.Println("===== response:", string(respBytes.Bytes()))
-
-		indexID, err := uuid.GenerateUUID()
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to generate index id: {{err}}", err))
-			return
-		}
-
-		// Build the index to cache based on the response received
-		index = &cache.Index{
-			// TODO: Check if you can get rid of the ID field
-			ID:          indexID,
-			CacheKey:    cacheKey,
-			LeaseID:     secret.LeaseID,
-			TokenID:     client.Token(),
-			RequestPath: r.RequestURI,
-			Response:    respBytes.Bytes(),
-		}
-
-		// Create a context for the secret renewal
-		// TODO: Not sure what to put in as value. The goal is only to derive a
-		// renewal specific context and nothing else. The value probably won't
-		// be used at all.
-		renewCtx := context.WithValue(ctx, "key", cacheKey)
-		index.Context = renewCtx
-
-		// Cache the response
-		if err := db.Set(index); err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
-			return
-		}
-
-		go handleSecret(renewCtx, client, secret, db, cacheKey, logger)
-
-		// Write the forwarded response to the response writer
-		copyHeader(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		w.Write(body)
+		*/
 		return
 	})
 }
@@ -701,38 +711,46 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func handleCacheClear(db cache.Cache) http.Handler {
-	type request struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
+func handleCacheClear(proxier proxy.Proxier) http.Handler {
+	/*
+		type request struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		}
+	*/
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		req := new(request)
-
-		err := jsonutil.DecodeJSONFromReader(r.Body, req)
-		if err != nil && err != io.EOF {
-			w.WriteHeader(400)
-			return
-		}
-
-		switch req.Type {
-		case "token_id", "lease_id", "request_path":
-			err = db.Evict(req.Type, req.Value)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
-				return
-			}
-		case "all":
-			if err := db.Flush(); err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
-				return
-			}
-		default:
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
-			return
-		}
-		// We've successfully cleared the cache
+		proxier.Send(&proxy.Request{
+			Request: r,
+		})
 		return
+		/*
+			req := new(request)
+
+			err := jsonutil.DecodeJSONFromReader(r.Body, req)
+			if err != nil && err != io.EOF {
+				w.WriteHeader(400)
+				return
+			}
+
+			switch req.Type {
+			case "token_id", "lease_id", "request_path":
+				err = db.Evict(req.Type, req.Value)
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+					return
+				}
+			case "all":
+				if err := db.Flush(); err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
+					return
+				}
+			default:
+				respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
+				return
+			}
+			// We've successfully cleared the cache
+			return
+		*/
 	})
 }
 

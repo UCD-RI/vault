@@ -5,11 +5,15 @@ import (
 	"fmt"
 
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/vault/command/agent/proxy"
 )
 
 type CacheType string
 
-const CacheTypeMemDB CacheType = "memdb"
+const (
+	CacheTypeMemDB CacheType = "memdb"
+	CacheTypeMock  CacheType = "mock"
+)
 
 // Cache is the interface required to serve as an in-memory database for the
 // agent cache.
@@ -63,6 +67,7 @@ type Index struct {
 
 // Config represents configuration options for creating the cache
 type Config struct {
+	Proxier   proxy.Proxier
 	Logger    hclog.Logger
 	CacheType CacheType
 }
@@ -71,9 +76,10 @@ type Config struct {
 // configuration
 func New(config *Config) (Cache, error) {
 	switch config.CacheType {
-	case CacheTypeMemDB:
-		return NewCacheMemDB(&CacheMemDBConfig{
-			Logger: config.Logger,
+	case CacheTypeMock:
+		return NewCacheMock(&CacheMockConfig{
+			Proxier: config.Proxier,
+			Logger:  config.Logger,
 		})
 
 	default:

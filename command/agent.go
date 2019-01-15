@@ -354,7 +354,7 @@ func (c *AgentCommand) Run(args []string) int {
 	go ah.Run(ctx, method)
 	go ss.Run(ctx, ah.OutputCh, sinks)
 
-	// Start agent listeners
+	// Prepare agent listeners
 	var listeners []net.Listener
 	if len(config.Cache.Listeners) != 0 {
 		listeners, err = serverListeners(config.Cache.Listeners, c.logWriter, c.UI)
@@ -365,9 +365,9 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Create the cache
-	db, err := cache.New(&cache.Config{
+	cache, err := cache.New(&cache.Config{
 		Proxier:   proxy.NewForwardProxier(),
-		CacheType: cache.CacheTypeMemDB,
+		CacheType: cache.CacheTypeMock,
 		Logger:    c.logger.Named("cache"),
 	})
 	if err != nil {
@@ -375,13 +375,21 @@ func (c *AgentCommand) Run(args []string) int {
 		return 1
 	}
 
-	proxier := db.(proxy.Proxier)
+	proxier := cache.(proxy.Proxier)
 
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
 		mux.Handle("/v1/agent/cache-clear", handleCacheClear(proxier))
 		mux.Handle("/", handleRequest(ctx, c.logger, client, proxier))
-		go http.Serve(ln, mux)
+
+		server := &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       5 * time.Minute,
+			ErrorLog:          c.logger.StandardLogger(nil),
+		}
+		go server.Serve(ln)
 	}
 
 	// Release the log gate.
@@ -467,11 +475,19 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, p
 			return
 		}
 
-		proxier.Send(&proxy.Request{
+		resp, err := proxier.Send(&proxy.Request{
 			CacheKey: cacheKey,
 			TokenID:  client.Token(),
 			Request:  r,
 		})
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
+			return
+		}
+
+		httpResponse := logical.LogicalResponseToHTTPResponse(resp.Response)
+
+		respondOk(w, httpResponse)
 
 		/*
 			// Check if the response for this request is already in the cache

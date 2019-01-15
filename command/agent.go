@@ -25,6 +25,7 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
+	uuid "github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
@@ -560,26 +561,22 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 
 		fmt.Println("===== response:", string(respBytes.Bytes()))
 
+		indexID, err := uuid.GenerateUUID()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to generate index id: {{err}}", err))
+			return
+		}
+
 		// Build the index to cache based on the response received
 		index = &cache.Index{
+			// TODO: Check if you can get rid of the ID field
+			ID:          indexID,
 			CacheKey:    cacheKey,
 			LeaseID:     secret.LeaseID,
 			TokenID:     client.Token(),
 			RequestPath: r.RequestURI,
 			Response:    respBytes.Bytes(),
 		}
-
-		/*
-			if secret.LeaseID != "" {
-				index.Key = secret.LeaseID
-				index.KeyType = "lease_id"
-			}
-
-			if secret.Auth != nil {
-				index.Key = secret.Auth.ClientToken
-				index.KeyType = "token_id"
-			}
-		*/
 
 		// Create a context for the secret renewal
 		// TODO: Not sure what to put in as value. The goal is only to derive a
@@ -719,31 +716,12 @@ func handleCacheClear(db cache.Cache) http.Handler {
 		}
 
 		switch req.Type {
-		/*
-			// TODO: token_id and lease_id should have different eviction logic
-			case "token_id", "lease_id":
-				index, err := db.GetByType(req.Value, req.Type)
-				if err != nil {
-					return
-				}
-				if index == nil {
-					respondError(w, http.StatusInternalServerError, errors.New("Index not found"))
-					return
-				}
-
-				fmt.Println("==== cleared cache by lease_id")
-				err = db.DeleteByIndex(index)
-				if err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete cache by index: {{err}}", err))
-					return
-				}
-			case "request_path":
-				err := db.DeleteByPrefix(req.Type, req.Value)
-				if err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete by request_path: {{err}}", err))
-					return
-				}
-		*/
+		case "token_id", "lease_id", "request_path":
+			err = db.Evict(req.Type, req.Value)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				return
+			}
 		case "all":
 			if err := db.Flush(); err != nil {
 				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))

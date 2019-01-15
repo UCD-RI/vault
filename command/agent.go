@@ -21,7 +21,6 @@ import (
 
 	"github.com/kr/pretty"
 	"github.com/mitchellh/cli"
-	"github.com/pkg/errors"
 	"github.com/posener/complete"
 
 	"github.com/hashicorp/errwrap"
@@ -445,7 +444,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db *cache.Cache) http.Handler {
+func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db cache.Database) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
 
@@ -466,7 +465,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 		}
 
 		// Check if the response for this request is already in the cache
-		index, err := db.Get(client.Token(), cacheKey)
+		index, err := db.Get("cache_key", cacheKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
 			return
@@ -584,7 +583,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 		index.Context = renewCtx
 
 		// Cache the response
-		if err := db.Insert(index); err != nil {
+		if err := db.Set(index); err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
 			return
 		}
@@ -599,7 +598,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 	})
 }
 
-func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, db *cache.Cache, cacheKey string, logger log.Logger) {
+func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, db cache.Database, cacheKey string, logger log.Logger) {
 	fmt.Printf("===== handleSecret: secret.Auth: %#v\n", secret.Auth)
 
 	// Compute the TTL for the secret
@@ -679,7 +678,7 @@ func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, d
 				// time
 				fmt.Println("===== updated response:", string(respBytes.Bytes()))
 
-				err = db.Insert(index)
+				err = db.Set(index)
 				if err != nil {
 					logger.Error("failed to update cache index", "error", err)
 					return
@@ -699,7 +698,7 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func handleCacheClear(db *cache.Cache) http.Handler {
+func handleCacheClear(db cache.Database) http.Handler {
 	type request struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`
@@ -714,31 +713,33 @@ func handleCacheClear(db *cache.Cache) http.Handler {
 		}
 
 		switch req.Type {
-		// TODO: token_id and lease_id should have different eviction logic
-		case "token_id", "lease_id":
-			index, err := db.GetByType(req.Value, req.Type)
-			if err != nil {
-				return
-			}
-			if index == nil {
-				respondError(w, http.StatusInternalServerError, errors.New("Index not found"))
-				return
-			}
+		/*
+			// TODO: token_id and lease_id should have different eviction logic
+			case "token_id", "lease_id":
+				index, err := db.GetByType(req.Value, req.Type)
+				if err != nil {
+					return
+				}
+				if index == nil {
+					respondError(w, http.StatusInternalServerError, errors.New("Index not found"))
+					return
+				}
 
-			fmt.Println("==== cleared cache by lease_id")
-			err = db.DeleteByIndex(index)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete cache by index: {{err}}", err))
-				return
-			}
-		case "request_path":
-			err := db.DeleteByPrefix(req.Type, req.Value)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete by request_path: {{err}}", err))
-				return
-			}
+				fmt.Println("==== cleared cache by lease_id")
+				err = db.DeleteByIndex(index)
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete cache by index: {{err}}", err))
+					return
+				}
+			case "request_path":
+				err := db.DeleteByPrefix(req.Type, req.Value)
+				if err != nil {
+					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to delete by request_path: {{err}}", err))
+					return
+				}
+		*/
 		case "all":
-			if err := db.Reset(); err != nil {
+			if err := db.Flush(); err != nil {
 				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
 				return
 			}

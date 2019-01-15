@@ -8,6 +8,45 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 )
 
+type IndexName uint32
+
+const (
+	IndexNameInvalid = iota
+	IndexNameCacheKey
+	IndexNameLeaseID
+	IndexNameRequestPath
+	IndexNameTokenID
+)
+
+func (indexName IndexName) String() string {
+	switch indexName {
+	case IndexNameCacheKey:
+		return "cache_key"
+	case IndexNameLeaseID:
+		return "lease_id"
+	case IndexNameRequestPath:
+		return "request_path"
+	case IndexNameTokenID:
+		return "token_id"
+	}
+	return ""
+}
+
+func indexName(indexName string) IndexName {
+	switch indexName {
+	case "cache_key":
+		return IndexNameCacheKey
+	case "lease_id":
+		return IndexNameLeaseID
+	case "request_path":
+		return IndexNameRequestPath
+	case "token_id":
+		return IndexNameTokenID
+	default:
+		return IndexNameInvalid
+	}
+}
+
 // Cache is the overaching cache object that holds the cached response along
 // with a coulple of indexes.
 type Cache struct {
@@ -21,7 +60,7 @@ type Config struct {
 }
 
 // New creates a new cache object
-func New(conf *Config) (*Cache, error) {
+func New(conf *Config) (Database, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err
@@ -72,23 +111,16 @@ func newDB() (*memdb.MemDB, error) {
 	return db, nil
 }
 
-// Reset is used to reset the entire cache.
-func (c *Cache) Reset() error {
-	newDB, err := newDB()
-	if err != nil {
-		c.logger.Error("error resetting the cache", "error", err)
-		return err
+func (c *Cache) Get(iName string, values ...string) (*Index, error) {
+	in := indexName(iName)
+	if in == IndexNameInvalid {
+		return nil, fmt.Errorf("invalid index name %q", iName)
 	}
-	c.cache = newDB
-	return nil
-}
 
-// Get retrieves the cached object by tokenID and cacheKey.
-func (c *Cache) Get(tokenID, cacheKey string) (*Index, error) {
 	txn := c.cache.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First("indexer", "id", cacheKey)
+	raw, err := txn.First("indexer", "id", values[0])
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +137,65 @@ func (c *Cache) Get(tokenID, cacheKey string) (*Index, error) {
 	return index, nil
 }
 
+func (c *Cache) Set(index *Index) error {
+	txn := c.cache.Txn(true)
+	defer txn.Abort()
+
+	if err := txn.Insert("indexer", index); err != nil {
+		return fmt.Errorf("unable to insert index into cache: %v", err)
+	}
+
+	txn.Commit()
+
+	return nil
+}
+
+func (c *Cache) Evict(indexName string, values ...string) error {
+	index, err := c.Get(indexName, values...)
+	if err != nil {
+		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
+	}
+
+	if index == nil {
+		return nil
+	}
+
+	txn := c.cache.Txn(true)
+	defer txn.Abort()
+
+	if err := txn.Delete("indexer", index); err != nil {
+		return fmt.Errorf("unable to delete index from cache: %v", err)
+	}
+
+	txn.Commit()
+
+	return nil
+}
+
+func (c *Cache) Flush() error {
+	newDB, err := newDB()
+	if err != nil {
+		c.logger.Error("error resetting the cache", "error", err)
+		return err
+	}
+	c.cache = newDB
+	return nil
+}
+
+func (c *Cache) EvictByPrefix(keyType, prefix string) error {
+	txn := c.cache.Txn(true)
+	defer txn.Abort()
+
+	lookupPrefix := prefix + "_prefix"
+	_, err := txn.DeleteAll("indexer", "key", keyType, lookupPrefix)
+	if err != nil {
+		return fmt.Errorf("unable to delete cache indexes for prefix %q: %v", prefix, err)
+	}
+
+	return nil
+}
+
+/*
 // GetByType returns the first found cached index of the specified key type.
 func (c *Cache) GetByType(key, keyType string) (*Index, error) {
 	txn := c.cache.Txn(false)
@@ -126,65 +217,4 @@ func (c *Cache) GetByType(key, keyType string) (*Index, error) {
 
 	return index, nil
 }
-
-// Insert adds an index object into the cache
-func (c *Cache) Insert(index *Index) error {
-	txn := c.cache.Txn(true)
-	defer txn.Abort()
-
-	if err := txn.Insert("indexer", index); err != nil {
-		return fmt.Errorf("unable to insert index into cache: %v", err)
-	}
-
-	txn.Commit()
-
-	return nil
-}
-
-// Remove deletes the cached index by tokenID and cacheKey.
-func (c *Cache) Remove(tokenID, cacheKey string) error {
-	index, err := c.Get(tokenID, cacheKey)
-	if err != nil {
-		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
-	}
-
-	txn := c.cache.Txn(true)
-	defer txn.Abort()
-
-	if err := txn.Delete("indexer", index); err != nil {
-		return fmt.Errorf("unable to delete index from cache: %v", err)
-	}
-
-	txn.Commit()
-
-	return nil
-}
-
-// DeleteByIndex deletes the specified cached index.
-func (c *Cache) DeleteByIndex(index *Index) error {
-	txn := c.cache.Txn(true)
-	defer txn.Abort()
-
-	if err := txn.Delete("indexer", index); err != nil {
-		return fmt.Errorf("unable to delete index from cache: %v", err)
-	}
-
-	txn.Commit()
-
-	return nil
-}
-
-// DeleteByPrefix deletes all indexes based on the provided on keyType and
-// prefix.
-func (c *Cache) DeleteByPrefix(keyType, prefix string) error {
-	txn := c.cache.Txn(true)
-	defer txn.Abort()
-
-	lookupPrefix := prefix + "_prefix"
-	_, err := txn.DeleteAll("indexer", "key", keyType, lookupPrefix)
-	if err != nil {
-		return fmt.Errorf("unable to delete cache indexes for prefix %q: %v", prefix, err)
-	}
-
-	return nil
-}
+*/

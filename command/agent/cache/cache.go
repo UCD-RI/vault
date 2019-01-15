@@ -4,9 +4,11 @@ import "context"
 
 // Database is the interface required to serve as an in-memory
 type Database interface {
-	Put(index *Index) error
-	Get(keyType string, factors ...string) *Index
-	Delete(keyType string, factors ...string) error
+	Set(index *Index) error
+	Get(indexName string, values ...string) (*Index, error)
+	Evict(indexName string, values ...string) error
+	EvictByPrefix(indexName string, prefix string) error
+	Flush() error
 }
 
 // Index holds all the data for a particular lease or request path

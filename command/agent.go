@@ -562,22 +562,29 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 
 		// Build the index to cache based on the response received
 		index = &cache.Index{
-			CacheKey: cacheKey,
-			TokenID:  client.Token(),
-			Response: respBytes.Bytes(),
+			CacheKey:    cacheKey,
+			LeaseID:     secret.LeaseID,
+			TokenID:     client.Token(),
+			RequestPath: r.RequestURI,
+			Response:    respBytes.Bytes(),
 		}
 
-		if secret.LeaseID != "" {
-			index.Key = secret.LeaseID
-			index.KeyType = "lease_id"
-		}
+		/*
+			if secret.LeaseID != "" {
+				index.Key = secret.LeaseID
+				index.KeyType = "lease_id"
+			}
 
-		if secret.Auth != nil {
-			index.Key = secret.Auth.ClientToken
-			index.KeyType = "token_id"
-		}
+			if secret.Auth != nil {
+				index.Key = secret.Auth.ClientToken
+				index.KeyType = "token_id"
+			}
+		*/
 
 		// Create a context for the secret renewal
+		// TODO: Not sure what to put in as value. The goal is only to derive a
+		// renewal specific context and nothing else. The value probably won't
+		// be used at all.
 		renewCtx := context.WithValue(ctx, "key", cacheKey)
 		index.Context = renewCtx
 

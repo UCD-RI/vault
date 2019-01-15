@@ -2,16 +2,28 @@ package cache
 
 import "context"
 
-// Database is the interface required to serve as an in-memory
-type Database interface {
+// Cache is the interface required to serve as an in-memory database for the
+// agent cache.
+type Cache interface {
+	// Set stores the given index in the cache
 	Set(index *Index) error
+
+	// Get returns the index based on the index type and the index values
 	Get(indexName string, values ...string) (*Index, error)
+
+	// Evict removes an index based on the index type and the index values
 	Evict(indexName string, values ...string) error
+
+	// Evict removes one or more indexes from the cache based on the index name
+	// and the prefix of the index value.
 	EvictByPrefix(indexName string, prefix string) error
+
+	// Flush clears out all the entries from the cache
 	Flush() error
 }
 
-// Index holds all the data for a particular lease or request path
+// Index holds the response that needs to be cached along with multiple other
+// values that serve as pointers to refet to this index.
 type Index struct {
 	// CacheKey is a value that uniquely represents a request. It is derived
 	// from the http request received by the agent.

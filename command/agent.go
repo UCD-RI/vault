@@ -364,11 +364,11 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	// Initialize cache and indexer
-	conf := &cache.Config{
-		Logger: c.logger.Named("cache"),
-	}
-	db, err := cache.New(conf)
+	// Create the cache
+	db, err := cache.New(&cache.Config{
+		CacheType: cache.CacheTypeMemDB,
+		Logger:    c.logger.Named("cache"),
+	})
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1

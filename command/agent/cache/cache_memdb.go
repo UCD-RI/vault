@@ -47,10 +47,10 @@ func indexName(indexName string) IndexName {
 	}
 }
 
-// Cache is the overaching cache object that holds the cached response along
+// CacheMemDB is the overaching cache object that holds the cached response along
 // with a coulple of indexes.
-type Cache struct {
-	cache  *memdb.MemDB
+type CacheMemDB struct {
+	db     *memdb.MemDB
 	logger hclog.Logger
 }
 
@@ -60,14 +60,14 @@ type Config struct {
 }
 
 // New creates a new cache object
-func New(conf *Config) (Database, error) {
+func New(conf *Config) (Cache, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err
 	}
 
-	return &Cache{
-		cache:  db,
+	return &CacheMemDB{
+		db:     db,
 		logger: conf.Logger,
 	}, nil
 }
@@ -111,13 +111,13 @@ func newDB() (*memdb.MemDB, error) {
 	return db, nil
 }
 
-func (c *Cache) Get(iName string, values ...string) (*Index, error) {
+func (c *CacheMemDB) Get(iName string, values ...string) (*Index, error) {
 	in := indexName(iName)
 	if in == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", iName)
 	}
 
-	txn := c.cache.Txn(false)
+	txn := c.db.Txn(false)
 	defer txn.Abort()
 
 	raw, err := txn.First("indexer", "id", values[0])
@@ -137,8 +137,8 @@ func (c *Cache) Get(iName string, values ...string) (*Index, error) {
 	return index, nil
 }
 
-func (c *Cache) Set(index *Index) error {
-	txn := c.cache.Txn(true)
+func (c *CacheMemDB) Set(index *Index) error {
+	txn := c.db.Txn(true)
 	defer txn.Abort()
 
 	if err := txn.Insert("indexer", index); err != nil {
@@ -150,7 +150,7 @@ func (c *Cache) Set(index *Index) error {
 	return nil
 }
 
-func (c *Cache) Evict(indexName string, values ...string) error {
+func (c *CacheMemDB) Evict(indexName string, values ...string) error {
 	index, err := c.Get(indexName, values...)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
@@ -160,7 +160,7 @@ func (c *Cache) Evict(indexName string, values ...string) error {
 		return nil
 	}
 
-	txn := c.cache.Txn(true)
+	txn := c.db.Txn(true)
 	defer txn.Abort()
 
 	if err := txn.Delete("indexer", index); err != nil {
@@ -172,18 +172,18 @@ func (c *Cache) Evict(indexName string, values ...string) error {
 	return nil
 }
 
-func (c *Cache) Flush() error {
+func (c *CacheMemDB) Flush() error {
 	newDB, err := newDB()
 	if err != nil {
 		c.logger.Error("error resetting the cache", "error", err)
 		return err
 	}
-	c.cache = newDB
+	c.db = newDB
 	return nil
 }
 
-func (c *Cache) EvictByPrefix(keyType, prefix string) error {
-	txn := c.cache.Txn(true)
+func (c *CacheMemDB) EvictByPrefix(keyType, prefix string) error {
+	txn := c.db.Txn(true)
 	defer txn.Abort()
 
 	lookupPrefix := prefix + "_prefix"
@@ -197,8 +197,8 @@ func (c *Cache) EvictByPrefix(keyType, prefix string) error {
 
 /*
 // GetByType returns the first found cached index of the specified key type.
-func (c *Cache) GetByType(key, keyType string) (*Index, error) {
-	txn := c.cache.Txn(false)
+func (c *CacheMemDB) GetByType(key, keyType string) (*Index, error) {
+	txn := c.db.Txn(false)
 	defer txn.Abort()
 
 	raw, err := txn.First("indexer", "key", keyType, key)

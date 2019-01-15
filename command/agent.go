@@ -444,7 +444,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db cache.Database) http.Handler {
+func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, db cache.Cache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
 
@@ -559,7 +559,6 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 		}
 
 		fmt.Println("===== response:", string(respBytes.Bytes()))
-		time.Sleep(5 * time.Second)
 
 		// Build the index to cache based on the response received
 		index = &cache.Index{
@@ -598,7 +597,7 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, d
 	})
 }
 
-func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, db cache.Database, cacheKey string, logger log.Logger) {
+func handleSecret(ctx context.Context, client *api.Client, secret *api.Secret, db cache.Cache, cacheKey string, logger log.Logger) {
 	fmt.Printf("===== handleSecret: secret.Auth: %#v\n", secret.Auth)
 
 	// Compute the TTL for the secret
@@ -698,7 +697,7 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func handleCacheClear(db cache.Database) http.Handler {
+func handleCacheClear(db cache.Cache) http.Handler {
 	type request struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`

@@ -47,20 +47,19 @@ func indexName(indexName string) IndexName {
 	}
 }
 
-// CacheMemDB is the overaching cache object that holds the cached response along
-// with a coulple of indexes.
+// CacheMemDB is an implementation of the `Cache` interface using the
+// hashicorp/go-memdb library.
 type CacheMemDB struct {
 	db     *memdb.MemDB
 	logger hclog.Logger
 }
 
-// Config is used to provide configuration options to the cache object on creation.
-type Config struct {
+// Config represents configuration options for cache object creation
+type CacheMemDBConfig struct {
 	Logger hclog.Logger
 }
 
-// New creates a new cache object
-func New(conf *Config) (Cache, error) {
+func NewCacheMemDB(config *CacheMemDBConfig) (Cache, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err
@@ -68,7 +67,7 @@ func New(conf *Config) (Cache, error) {
 
 	return &CacheMemDB{
 		db:     db,
-		logger: conf.Logger,
+		logger: config.Logger,
 	}, nil
 }
 

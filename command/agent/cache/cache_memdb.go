@@ -2,7 +2,6 @@ package cache
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -11,29 +10,6 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 )
-
-// Index holds all the data for a particular lease or request path.
-type Index struct {
-	// CacheKey is a hashed key derived from the request.
-	CacheKey string
-
-	// Key can be a lease ID, token ID, or request path.
-	Key string
-
-	// KeyType is the type of key that's be tracked. It can be lease_id, token_id,
-	// or request_path.
-	KeyType string
-
-	// TokenID is the token used for this request.
-	TokenID string
-
-	// context is the context gets passed into api.Renewer and retrived during
-	// cache invalidation to stop renewals.
-	Context context.Context
-
-	// Response is the byte representation of the response that we're caching
-	Response []byte
-}
 
 // Cache is the overaching cache object that holds the cached response along
 // with a coulple of indexes.

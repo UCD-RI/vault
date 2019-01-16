@@ -364,8 +364,8 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	// Create the cache
-	cache, err := cache.New(&cache.Config{
+	// Create the cache proxy
+	cacheProxy, err := cache.New(&cache.Config{
 		Proxier:   proxy.NewAPIProxy(),
 		CacheType: cache.CacheTypeMock,
 		Logger:    c.logger.Named("cache"),
@@ -374,13 +374,17 @@ func (c *AgentCommand) Run(args []string) int {
 		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
 		return 1
 	}
+	cacheProxier := cacheProxy.(proxy.Proxier)
 
-	proxier := cache.(proxy.Proxier)
+	// Create the renew proxy
+	renewProxier := proxy.NewRenewProxy(&proxy.RenewProxyConfig{
+		Proxier: cacheProxier,
+	})
 
 	for _, ln := range listeners {
 		mux := http.NewServeMux()
-		mux.Handle("/v1/agent/cache-clear", handleCacheClear(proxier))
-		mux.Handle("/", handleRequest(ctx, c.logger, client, proxier))
+		mux.Handle("/v1/agent/cache-clear", handleCacheClear(renewProxier))
+		mux.Handle("/", handleRequest(ctx, c.logger, client, renewProxier))
 
 		server := &http.Server{
 			Handler:           mux,
@@ -457,7 +461,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 
 func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, proxier proxy.Proxier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("===== req: %#v\n", r)
+		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
 		resp, err := proxier.Send(&proxy.Request{
 			Request: r,
 			Token:   client.Token(),

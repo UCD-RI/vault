@@ -475,19 +475,27 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, p
 			return
 		}
 
+		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
+
 		resp, err := proxier.Send(&proxy.Request{
-			CacheKey: cacheKey,
-			TokenID:  client.Token(),
-			Request:  r,
+			CacheKey:   cacheKey,
+			Request:    r,
+			AgentToken: client.Token(),
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
 			return
 		}
 
-		httpResponse := logical.LogicalResponseToHTTPResponse(resp.Response)
+		respBody, err := ioutil.ReadAll(resp.Response.Body)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
+			return
+		}
 
-		respondOk(w, httpResponse)
+		copyHeader(w.Header(), resp.Response.Header)
+		w.WriteHeader(resp.Response.StatusCode)
+		w.Write(respBody)
 
 		/*
 			// Check if the response for this request is already in the cache

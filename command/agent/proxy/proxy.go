@@ -3,17 +3,17 @@ package proxy
 import (
 	"net/http"
 
-	"github.com/hashicorp/vault/logical"
+	"github.com/hashicorp/vault/api"
 )
 
 type Request struct {
-	CacheKey string
-	TokenID  string
-	Request  *http.Request
+	CacheKey   string
+	AgentToken string
+	Request    *http.Request
 }
 
 type Response struct {
-	Response *logical.Response
+	Response *api.Response
 }
 
 // Proxier is the interface implemented by the proxy layers (e.g. caches, API

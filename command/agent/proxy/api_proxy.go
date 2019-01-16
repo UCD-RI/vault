@@ -11,15 +11,14 @@ import (
 
 // APIProxy is an implementation of the proxier interface that is used to
 // forward the request to Vault and get the response.
-type APIProxy struct {
-}
+type APIProxy struct{}
 
 func NewAPIProxy() Proxier {
 	return &APIProxy{}
 }
 
 func (ap *APIProxy) Send(req *Request) (*Response, error) {
-	fmt.Printf("===== ForwardProxier.Send() received req: %#v\n", req)
+	fmt.Printf("===== APIProxy.Send() req: %#v\n", req)
 
 	client, err := api.NewClient(api.DefaultConfig())
 	if err != nil {

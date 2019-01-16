@@ -7,9 +7,9 @@ import (
 )
 
 type Request struct {
-	CacheKey   string
-	AgentToken string
-	Request    *http.Request
+	CacheKey string
+	Token    string
+	Request  *http.Request
 }
 
 type Response struct {

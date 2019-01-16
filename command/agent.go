@@ -366,7 +366,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 	// Create the cache
 	cache, err := cache.New(&cache.Config{
-		Proxier:   proxy.NewForwardProxier(),
+		Proxier:   proxy.NewAPIProxy(),
 		CacheType: cache.CacheTypeMock,
 		Logger:    c.logger.Named("cache"),
 	})
@@ -458,29 +458,9 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, proxier proxy.Proxier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== req: %#v\n", r)
-
-		// Read the body out and reset the request body. This is so that body
-		// can still be read while forwarding the request.
-		reqBody, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read request body: {{err}}", err))
-			return
-		}
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
-
-		// Compute the cache key to perform a lookup in the cache
-		cacheKey, err := computeCacheKey(r)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to compute cache key: {{err}}", err))
-			return
-		}
-
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
-
 		resp, err := proxier.Send(&proxy.Request{
-			CacheKey:   cacheKey,
-			Request:    r,
-			AgentToken: client.Token(),
+			Request: r,
+			Token:   client.Token(),
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
@@ -496,141 +476,6 @@ func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, p
 		copyHeader(w.Header(), resp.Response.Header)
 		w.WriteHeader(resp.Response.StatusCode)
 		w.Write(respBody)
-
-		/*
-			// Check if the response for this request is already in the cache
-			index, err := db.Get("cache_key", cacheKey)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get index for cache key: {{err}}", err))
-				return
-			}
-			if index != nil {
-				// Cached request is found
-				fmt.Println("========= got cached request!")
-				fmt.Println(string(index.Response))
-
-				// Deserialize the response
-				reader := bufio.NewReader(bytes.NewReader(index.Response))
-				resp, err := http.ReadResponse(reader, nil)
-				if resp != nil {
-					defer resp.Body.Close()
-				}
-				if err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to deserialize cached response: {{err}}", err))
-					return
-				}
-
-				// Read the response body and return it
-				body, err := ioutil.ReadAll(resp.Body)
-				if err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read cached response: {{err}}", err))
-					return
-				}
-
-				copyHeader(w.Header(), resp.Header)
-				w.WriteHeader(resp.StatusCode)
-				w.Write(body)
-
-				return
-			}
-
-			//
-			// Secret is not present in the cache. Forward the request to Vault.
-			//
-			fmt.Println("========= forwarding request...")
-
-			// Create a new API request to forward the request to Vault
-			fwReq := client.NewRequest(r.Method, r.URL.Path)
-
-			// Deserialize the request and set the body for the API request
-			var out map[string]interface{}
-			err = jsonutil.DecodeJSONFromReader(bytes.NewReader(reqBody), &out)
-			if err != nil && err != io.EOF {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to decode request: {{err}}", err))
-				return
-			}
-			fwReq.SetJSONBody(out)
-
-			resp, err := client.RawRequestWithContext(ctx, fwReq)
-			if resp != nil {
-				defer resp.Body.Close()
-			}
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to forward request to Vault: {{err}}", err))
-				return
-			}
-
-			// Read the body out and reset the response body. The read out body
-			// will be returned to the client.
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-				return
-			}
-			resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-
-			secret, err := api.ParseSecret(bytes.NewReader(body))
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to parse secret from response: {{err}}", err))
-				return
-			}
-
-			// Fast path if the response is not cacheable
-			if secret.Auth == nil && secret.LeaseID == "" {
-				// Write the forwarded response to the response writer
-				copyHeader(w.Header(), resp.Header)
-				w.WriteHeader(resp.StatusCode)
-				w.Write(body)
-				return
-			}
-
-			// Serialze the reponse to persist in cache
-			var respBytes bytes.Buffer
-			err = resp.Write(&respBytes)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to serialize response body: {{err}}", err))
-				return
-			}
-
-			fmt.Println("===== response:", string(respBytes.Bytes()))
-
-			indexID, err := uuid.GenerateUUID()
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to generate index id: {{err}}", err))
-				return
-			}
-
-			// Build the index to cache based on the response received
-			index = &cache.Index{
-				// TODO: Check if you can get rid of the ID field
-				ID:          indexID,
-				CacheKey:    cacheKey,
-				LeaseID:     secret.LeaseID,
-				TokenID:     client.Token(),
-				RequestPath: r.RequestURI,
-				Response:    respBytes.Bytes(),
-			}
-
-			// Create a context for the secret renewal
-			// TODO: Not sure what to put in as value. The goal is only to derive a
-			// renewal specific context and nothing else. The value probably won't
-			// be used at all.
-			renewCtx := context.WithValue(ctx, "key", cacheKey)
-			index.Context = renewCtx
-
-			// Cache the response
-			if err := db.Set(index); err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to insert index into the cache: {{err}}", err))
-				return
-			}
-
-			go handleSecret(renewCtx, client, secret, db, cacheKey, logger)
-
-			// Write the forwarded response to the response writer
-			copyHeader(w.Header(), resp.Header)
-			w.WriteHeader(resp.StatusCode)
-			w.Write(body)
-		*/
 		return
 	})
 }

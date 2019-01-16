@@ -9,16 +9,16 @@ import (
 	"github.com/hashicorp/vault/helper/consts"
 )
 
-// ForwardProxier is an implementation of the proxier interface that is used to
+// APIProxy is an implementation of the proxier interface that is used to
 // forward the request to Vault and get the response.
-type ForwardProxier struct {
+type APIProxy struct {
 }
 
-func NewForwardProxier() Proxier {
-	return &ForwardProxier{}
+func NewAPIProxy() Proxier {
+	return &APIProxy{}
 }
 
-func (f *ForwardProxier) Send(req *Request) (*Response, error) {
+func (ap *APIProxy) Send(req *Request) (*Response, error) {
 	fmt.Printf("===== ForwardProxier.Send() received req: %#v\n", req)
 
 	client, err := api.NewClient(api.DefaultConfig())

@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/helper/consts"
 )
 
 // APIProxy is an implementation of the proxier interface that is used to
@@ -24,11 +23,7 @@ func (ap *APIProxy) Send(req *Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	reqToken := req.Request.Header.Get(consts.AuthHeaderName)
-	client.SetToken(reqToken)
-
-	//fmt.Printf("reqToken: %q\n", reqToken)
+	client.SetToken(req.Token)
 
 	fwReq := client.NewRequest(req.Request.Method, req.Request.URL.Path)
 
@@ -46,4 +41,8 @@ func (ap *APIProxy) Send(req *Request) (*Response, error) {
 	return &Response{
 		Response: resp,
 	}, nil
+}
+
+func (ap *APIProxy) Update(req *UpdateRequest) (*UpdateResponse, error) {
+	return nil, nil
 }

@@ -1,28 +1,25 @@
 package cache
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/hashicorp/vault/api"
 )
 
-// SendRequest is the input for Proxier.Send.
 type SendRequest struct {
-	Token       string
-	Request     *http.Request
-	RequestBody []byte
+	CacheKey string
+	Token    string
+	Request  *http.Request
 }
 
-// SendResponse is the output from Proxier.Send.
 type SendResponse struct {
-	Response     *api.Response
-	ResponseBody []byte
+	Response *api.Response
 }
 
 // Proxier is the interface implemented by different components that are
-// responsible for performing specific tasks, such as caching and proxying. All
-// these tasks combined together would serve the request received by the agent.
+// responsible for performing specific tasks. All these tasks combined together
+// would serve the request received by the agent. The components that implement
+// this interface are RenewProxy, Cache and APIProxy.
 type Proxier interface {
-	Send(ctx context.Context, req *SendRequest) (*SendResponse, error)
+	Send(*SendRequest) (*SendResponse, error)
 }

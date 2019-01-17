@@ -31,8 +31,8 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
 	"github.com/hashicorp/vault/command/agent/cache"
+	"github.com/hashicorp/vault/command/agent/cache/core"
 	"github.com/hashicorp/vault/command/agent/config"
-	"github.com/hashicorp/vault/command/agent/proxy"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
@@ -359,7 +359,7 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	for _, ln := range listeners {
-		mux, err := cache.Handler(ctx, &cache.CacheConfig{
+		mux, err := core.Handler(ctx, &core.CacheConfig{
 			Logger: c.logger,
 			Client: client,
 		})
@@ -441,7 +441,7 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func handleCacheClear(proxier proxy.Proxier) http.Handler {
+func handleCacheClear(proxier cache.Proxier) http.Handler {
 	/*
 		type request struct {
 			Type  string `json:"type"`
@@ -449,7 +449,7 @@ func handleCacheClear(proxier proxy.Proxier) http.Handler {
 		}
 	*/
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxier.Send(&proxy.Request{
+		proxier.Send(&cache.SendRequest{
 			Request: r,
 		})
 		return

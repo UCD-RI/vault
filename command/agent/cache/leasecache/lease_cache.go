@@ -1,4 +1,4 @@
-package cache
+package leasecache
 
 import (
 	"bufio"
@@ -11,14 +11,14 @@ import (
 
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/proxy"
+	"github.com/hashicorp/vault/command/agent/cache"
 )
 
 // LeaseCache is an implementation of Proxier that handles
 // the caching of responses. It passes the incoming request
 // to an underlying Proxier implementation.
 type LeaseCache struct {
-	underlying proxy.Proxier
+	underlying cache.Proxier
 	logger     hclog.Logger
 	db         Cache
 }
@@ -26,7 +26,7 @@ type LeaseCache struct {
 // LeaseCacheConfig is the configuration for initializing a new
 // LeaseCache.
 type LeaseCacheConfig struct {
-	Proxier proxy.Proxier
+	Proxier cache.Proxier
 	Logger  hclog.Logger
 }
 
@@ -52,7 +52,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // Send performs a cache lookup on the incoming request. If it's a cache hit, it
 // will return the cached response, otherwise it will delegate to the underlygin
 // Proxier and cache the received response.
-func (c *LeaseCache) Send(req *proxy.Request) (*proxy.Response, error) {
+func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	// Compute the CacheKey
 	cacheKey, err := computeCacheKey(req.Request)
 	if err != nil {
@@ -79,7 +79,7 @@ func (c *LeaseCache) Send(req *proxy.Request) (*proxy.Response, error) {
 			return nil, err
 		}
 
-		return &proxy.Response{
+		return &cache.SendResponse{
 			Response: &api.Response{
 				Response: resp,
 			},

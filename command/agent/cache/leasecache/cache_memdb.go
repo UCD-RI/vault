@@ -1,4 +1,4 @@
-package cache
+package leasecache
 
 import (
 	"errors"

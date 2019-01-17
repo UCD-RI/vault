@@ -1,16 +1,16 @@
-package cache
+package leasecache
 
 import (
 	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/vault/command/agent/proxy"
+	"github.com/hashicorp/vault/command/agent/cache"
 )
 
 type MockCache struct {
-	underlying proxy.Proxier
+	underlying cache.Proxier
 }
 
 type MockCacheConfig struct {
-	Proxier proxy.Proxier
+	Proxier cache.Proxier
 	Logger  hclog.Logger
 }
 
@@ -20,6 +20,6 @@ func NewMockCache(conf *MockCacheConfig) (*MockCache, error) {
 	}, nil
 }
 
-func (c *MockCache) Send(req *proxy.Request) (*proxy.Response, error) {
+func (c *MockCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	return c.underlying.Send(req)
 }

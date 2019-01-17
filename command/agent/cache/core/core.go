@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/command/agent/cache/apiproxy"
@@ -19,17 +21,19 @@ import (
 )
 
 type Core struct {
-	logger  hclog.Logger
-	client  *api.Client
-	proxier cache.Proxier
+	logger    hclog.Logger
+	client    *api.Client
+	proxier   cache.Proxier
+	listeners []net.Listener
 }
 
-type CacheConfig struct {
-	Logger hclog.Logger
-	Client *api.Client
+type Config struct {
+	Logger    hclog.Logger
+	Client    *api.Client
+	Listeners []net.Listener
 }
 
-func NewCore(config *CacheConfig) (*Core, error) {
+func New(config *Config) (*Core, error) {
 	proxier, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
 		Proxier: apiproxy.NewAPIProxy(),
 		Logger:  config.Logger.Named("agent.core"),
@@ -39,25 +43,30 @@ func NewCore(config *CacheConfig) (*Core, error) {
 	}
 
 	return &Core{
-		logger:  config.Logger,
-		client:  config.Client,
-		proxier: proxier,
+		logger:    config.Logger,
+		client:    config.Client,
+		proxier:   proxier,
+		listeners: config.Listeners,
 	}, nil
 }
 
-func (c *Core) StartListening() {
-
+func (c *Core) Listen(ctx context.Context) {
+	for _, ln := range c.listeners {
+		server := &http.Server{
+			Handler:           c.handler(ctx),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       5 * time.Minute,
+			ErrorLog:          c.logger.StandardLogger(nil),
+		}
+		go server.Serve(ln)
+	}
 }
 
-func Handler(ctx context.Context, config *CacheConfig) (http.Handler, error) {
-	core, err := NewCore(config)
-	if err != nil {
-		return nil, err
-	}
-
+func (c *Core) handler(ctx context.Context) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/", handleRequest(ctx, core))
-	return mux, nil
+	mux.Handle("/", handleRequest(ctx, c))
+	return mux
 }
 
 func handleRequest(ctx context.Context, core *Core) http.Handler {

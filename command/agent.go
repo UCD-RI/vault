@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"net"
 
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -30,7 +29,6 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/gcp"
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
-	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/command/agent/cache/core"
 	"github.com/hashicorp/vault/command/agent/config"
 	"github.com/hashicorp/vault/command/agent/sink"
@@ -358,25 +356,16 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	for _, ln := range listeners {
-		mux, err := core.Handler(ctx, &core.CacheConfig{
-			Logger: c.logger,
-			Client: client,
-		})
-		if err != nil {
-			c.UI.Error(fmt.Sprintf("failed to create cache handler: %v", err))
-			return 1
-		}
-
-		server := &http.Server{
-			Handler:           mux,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       30 * time.Second,
-			IdleTimeout:       5 * time.Minute,
-			ErrorLog:          c.logger.StandardLogger(nil),
-		}
-		go server.Serve(ln)
+	core, err := core.New(&core.Config{
+		Logger:    c.logger,
+		Client:    client,
+		Listeners: listeners,
+	})
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error while creating core: %v", err))
+		return 1
 	}
+	core.Listen(ctx)
 
 	// Release the log gate.
 	c.logGate.Flush()
@@ -441,19 +430,17 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
+/*
 func handleCacheClear(proxier cache.Proxier) http.Handler {
-	/*
 		type request struct {
 			Type  string `json:"type"`
 			Value string `json:"value"`
 		}
-	*/
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxier.Send(&cache.SendRequest{
 			Request: r,
 		})
 		return
-		/*
 			req := new(request)
 
 			err := jsonutil.DecodeJSONFromReader(r.Body, req)
@@ -480,9 +467,9 @@ func handleCacheClear(proxier cache.Proxier) http.Handler {
 			}
 			// We've successfully cleared the cache
 			return
-		*/
 	})
 }
+*/
 
 // rmListener is an implementation of net.Listener that forwards most
 // calls to the listener but also removes a file as part of the close. We

@@ -49,6 +49,13 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 	return lc, nil
 }
 
+// Update gets called by the RenewProxy when it has a new secret renewal.
+// CacheProxy will then update the contents of its cache.
+func (c *LeaseCache) Update(req *proxy.UpdateRequest) (*proxy.UpdateResponse, error) {
+	fmt.Printf("===== LeaseCache.Update() called\n")
+	return nil, nil
+}
+
 // Send performs a cache lookup on the incoming request. If it's a cache hit, it
 // will return the cached response, otherwise it will delegate to the underlygin
 // Proxier and cache the received response.

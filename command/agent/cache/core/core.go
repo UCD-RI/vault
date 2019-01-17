@@ -1,4 +1,4 @@
-package cache
+package core
 
 import (
 	"context"
@@ -7,19 +7,21 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/hashicorp/vault/command/agent/cache"
+	"github.com/hashicorp/vault/command/agent/cache/apiproxy"
+	"github.com/hashicorp/vault/command/agent/cache/leasecache"
 	vaulthttp "github.com/hashicorp/vault/http"
 
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/proxy"
 	"github.com/hashicorp/vault/logical"
 )
 
 type Core struct {
 	logger  hclog.Logger
 	client  *api.Client
-	proxier proxy.Proxier
+	proxier cache.Proxier
 }
 
 type CacheConfig struct {
@@ -28,8 +30,8 @@ type CacheConfig struct {
 }
 
 func NewCore(config *CacheConfig) (*Core, error) {
-	proxier, err := NewLeaseCache(&LeaseCacheConfig{
-		Proxier: proxy.NewAPIProxy(),
+	proxier, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
+		Proxier: apiproxy.NewAPIProxy(),
 		Logger:  config.Logger.Named("agent.core"),
 	})
 	if err != nil {
@@ -62,7 +64,7 @@ func handleRequest(ctx context.Context, core *Core) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
 
-		resp, err := core.proxier.Send(&proxy.Request{
+		resp, err := core.proxier.Send(&cache.SendRequest{
 			Request: r,
 			Token:   core.client.Token(),
 		})

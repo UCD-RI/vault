@@ -1,4 +1,4 @@
-package proxy
+package cache
 
 import (
 	"net/http"
@@ -6,13 +6,13 @@ import (
 	"github.com/hashicorp/vault/api"
 )
 
-type Request struct {
+type SendRequest struct {
 	CacheKey string
 	Token    string
 	Request  *http.Request
 }
 
-type Response struct {
+type SendResponse struct {
 	Response *api.Response
 }
 
@@ -21,5 +21,5 @@ type Response struct {
 // would serve the request received by the agent. The components that implement
 // this interface are RenewProxy, Cache and APIProxy.
 type Proxier interface {
-	Send(*Request) (*Response, error)
+	Send(*SendRequest) (*SendResponse, error)
 }

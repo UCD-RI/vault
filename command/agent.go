@@ -358,21 +358,15 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		Proxier: proxy.NewAPIProxy(),
-		Logger:  c.logger.Named("cache"),
-	})
-	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error creating cache: %s", err))
-		return 1
-	}
-
 	for _, ln := range listeners {
-		mux := cache.Handler(ctx, &cache.CacheConfig{
-			Logger:  c.logger,
-			Client:  client,
-			Proxier: leaseCache,
+		mux, err := cache.Handler(ctx, &cache.CacheConfig{
+			Logger: c.logger,
+			Client: client,
 		})
+		if err != nil {
+			c.UI.Error(fmt.Sprintf("failed to create cache handler: %v", err))
+			return 1
+		}
 
 		server := &http.Server{
 			Handler:           mux,

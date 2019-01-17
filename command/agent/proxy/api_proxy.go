@@ -42,7 +42,3 @@ func (ap *APIProxy) Send(req *Request) (*Response, error) {
 		Response: resp,
 	}, nil
 }
-
-func (ap *APIProxy) Update(req *UpdateRequest) (*UpdateResponse, error) {
-	return nil, nil
-}

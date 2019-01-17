@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
+
 	"net/http"
 	"os"
 	"sort"
@@ -22,7 +22,6 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
 	"github.com/hashicorp/vault/command/agent/auth/approle"
@@ -41,8 +40,6 @@ import (
 	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
 	"github.com/hashicorp/vault/helper/tlsutil"
-	vaulthttp "github.com/hashicorp/vault/http"
-	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/version"
 )
 
@@ -361,7 +358,7 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	cacheProxy, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
+	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
 		Proxier: proxy.NewAPIProxy(),
 		Logger:  c.logger.Named("cache"),
 	})
@@ -370,15 +367,12 @@ func (c *AgentCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Create the renew proxy
-	renewProxier := proxy.NewRenewProxy(&proxy.RenewProxyConfig{
-		Proxier: cacheProxy,
-	})
-
 	for _, ln := range listeners {
-		mux := http.NewServeMux()
-		mux.Handle("/v1/agent/cache-clear", handleCacheClear(renewProxier))
-		mux.Handle("/", handleRequest(ctx, c.logger, client, renewProxier))
+		mux := cache.Handler(ctx, &cache.CacheConfig{
+			Logger:  c.logger,
+			Client:  client,
+			Proxier: leaseCache,
+		})
 
 		server := &http.Server{
 			Handler:           mux,
@@ -451,39 +445,6 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 		return nil
 	}
 	return os.Remove(pidPath)
-}
-
-func handleRequest(ctx context.Context, logger log.Logger, client *api.Client, proxier proxy.Proxier) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
-		resp, err := proxier.Send(&proxy.Request{
-			Request: r,
-			Token:   client.Token(),
-		})
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
-			return
-		}
-
-		respBody, err := ioutil.ReadAll(resp.Response.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-			return
-		}
-
-		copyHeader(w.Header(), resp.Response.Header)
-		w.WriteHeader(resp.Response.StatusCode)
-		w.Write(respBody)
-		return
-	})
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
 }
 
 func handleCacheClear(proxier proxy.Proxier) http.Handler {
@@ -771,19 +732,4 @@ PASSPHRASECORRECT:
 	ln = tls.NewListener(ln, tlsConf)
 	props["tls"] = "enabled"
 	return ln, props, cg.Reload, nil
-}
-
-func respondError(w http.ResponseWriter, status int, err error) {
-	logical.AdjustErrorStatusCode(&status, err)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	resp := &vaulthttp.ErrorResponse{Errors: make([]string, 0, 1)}
-	if err != nil {
-		resp.Errors = append(resp.Errors, err.Error())
-	}
-
-	enc := json.NewEncoder(w)
-	enc.Encode(resp)
 }

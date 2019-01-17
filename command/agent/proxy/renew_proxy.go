@@ -87,21 +87,19 @@ func (rp *RenewProxy) handleSecret(req *Request, secret *api.Secret) {
 				return
 			case renewal := <-renewer.RenewCh():
 				fmt.Printf("===== successful renewal: %#v\n", renewal.Secret.Auth)
-				// Inform cache proxy about the renewal
-				_, err = rp.proxier.Update(&UpdateRequest{
-					Request: req.Request,
-					Renewal: renewal,
-				})
-				if err != nil {
-					fmt.Printf("failed to update renewal data in the cache proxy: %v\n", err)
-					return
-				}
+				/*
+					// Inform cache proxy about the renewal
+					_, err = rp.proxier.Update(&UpdateRequest{
+						Request: req.Request,
+						Renewal: renewal,
+					})
+					if err != nil {
+						fmt.Printf("failed to update renewal data in the cache proxy: %v\n", err)
+						return
+					}
+				*/
 			}
 		}
 	}
 	go renewSecret(context.Background(), secret)
-}
-
-func (rp *RenewProxy) Update(req *UpdateRequest) (*UpdateResponse, error) {
-	return nil, nil
 }

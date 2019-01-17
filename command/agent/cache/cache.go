@@ -1,18 +1,13 @@
 package cache
 
 import (
-	"context"
 	"fmt"
-
-	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/vault/command/agent/proxy"
 )
 
 type CacheType string
 
 const (
 	CacheTypeMemDB CacheType = "memdb"
-	CacheTypeMock  CacheType = "mock"
 )
 
 // Cache is the interface required to serve as an in-memory database for the
@@ -35,40 +30,8 @@ type Cache interface {
 	Flush() error
 }
 
-// Index holds the response to be cached along with multiple other values that
-// serve as pointers to refer back to this index.
-type Index struct {
-	// Response is the serialized response object that the agent is caching
-	Response []byte
-
-	// CacheKey is a value that uniquely represents the request held by this
-	// index. This is computed by serializing and hashing the response object.
-	CacheKey string
-
-	// LeaseID is the identifier of the lease in Vault, that belongs to the
-	// response held by this index
-	LeaseID string
-
-	// RequestPath is the path of the request that resulted in the response
-	// held by this index
-	RequestPath string
-
-	// TokenID is the token fetched the response held by this index
-	TokenID string
-
-	// Context is the context object for a goroutine that manages the renewal
-	// of the secret that belongs to the response in this index. This context
-	// is used to stop the renewal process during cache invalidations.
-	Context context.Context
-
-	// ID is the identifier for the index
-	ID string
-}
-
 // Config represents configuration options for creating the cache
 type Config struct {
-	Proxier   proxy.Proxier
-	Logger    hclog.Logger
 	CacheType CacheType
 }
 
@@ -76,12 +39,8 @@ type Config struct {
 // configuration
 func New(config *Config) (Cache, error) {
 	switch config.CacheType {
-	case CacheTypeMock:
-		return NewCacheMock(&CacheMockConfig{
-			Proxier: config.Proxier,
-			Logger:  config.Logger,
-		})
-
+	case CacheTypeMemDB:
+		return NewCacheMemDB()
 	default:
 		return nil, fmt.Errorf("unsupported cache type: %q", config.CacheType)
 	}

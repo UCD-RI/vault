@@ -4,70 +4,23 @@ import (
 	"errors"
 	"fmt"
 
-	hclog "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 )
-
-type IndexName uint32
-
-const (
-	IndexNameInvalid = iota
-	IndexNameCacheKey
-	IndexNameLeaseID
-	IndexNameRequestPath
-	IndexNameTokenID
-)
-
-func (indexName IndexName) String() string {
-	switch indexName {
-	case IndexNameCacheKey:
-		return "cache_key"
-	case IndexNameLeaseID:
-		return "lease_id"
-	case IndexNameRequestPath:
-		return "request_path"
-	case IndexNameTokenID:
-		return "token_id"
-	}
-	return ""
-}
-
-func indexName(indexName string) IndexName {
-	switch indexName {
-	case "cache_key":
-		return IndexNameCacheKey
-	case "lease_id":
-		return IndexNameLeaseID
-	case "request_path":
-		return IndexNameRequestPath
-	case "token_id":
-		return IndexNameTokenID
-	default:
-		return IndexNameInvalid
-	}
-}
 
 // CacheMemDB is an implementation of the `Cache` interface using the
 // hashicorp/go-memdb library.
 type CacheMemDB struct {
-	db     *memdb.MemDB
-	logger hclog.Logger
+	db *memdb.MemDB
 }
 
-// Config represents configuration options for cache object creation
-type CacheMemDBConfig struct {
-	Logger hclog.Logger
-}
-
-func NewCacheMemDB(config *CacheMemDBConfig) (Cache, error) {
+func NewCacheMemDB() (Cache, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err
 	}
 
 	return &CacheMemDB{
-		db:     db,
-		logger: config.Logger,
+		db: db,
 	}, nil
 }
 
@@ -79,13 +32,6 @@ func newDB() (*memdb.MemDB, error) {
 				Indexes: map[string]*memdb.IndexSchema{
 					"id": &memdb.IndexSchema{
 						Name:   "id",
-						Unique: true,
-						Indexer: &memdb.StringFieldIndex{
-							Field: "ID",
-						},
-					},
-					"cache_key": &memdb.IndexSchema{
-						Name:   "cache_key",
 						Unique: true,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "CacheKey",
@@ -130,6 +76,9 @@ func (c *CacheMemDB) Get(iName string, indexValue string) (*Index, error) {
 	if in == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", iName)
 	}
+	if in == IndexNameCacheKey {
+		iName = "id"
+	}
 
 	txn := c.db.Txn(false)
 	defer txn.Abort()
@@ -165,6 +114,11 @@ func (c *CacheMemDB) Set(index *Index) error {
 }
 
 func (c *CacheMemDB) Evict(iName string, indexValue string) error {
+	// If the iName is "cache_key", do the lookup as "id"
+	if indexName(iName) == IndexNameCacheKey {
+		iName = "id"
+	}
+
 	index, err := c.Get(iName, indexValue)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
@@ -189,7 +143,6 @@ func (c *CacheMemDB) Evict(iName string, indexValue string) error {
 func (c *CacheMemDB) Flush() error {
 	newDB, err := newDB()
 	if err != nil {
-		c.logger.Error("error resetting the cache", "error", err)
 		return err
 	}
 	c.db = newDB

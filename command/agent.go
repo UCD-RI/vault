@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -364,21 +363,18 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	// Create the cache proxy
-	cacheProxy, err := cache.New(&cache.Config{
-		Proxier:   proxy.NewAPIProxy(),
-		CacheType: cache.CacheTypeMock,
-		Logger:    c.logger.Named("cache"),
+	cacheProxy, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
+		Proxier: proxy.NewAPIProxy(),
+		Logger:  c.logger.Named("cache"),
 	})
 	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error creating cache: %v", err))
+		c.UI.Error(fmt.Sprintf("Error creating cache: %s", err))
 		return 1
 	}
-	cacheProxier := cacheProxy.(proxy.Proxier)
 
 	// Create the renew proxy
 	renewProxier := proxy.NewRenewProxy(&proxy.RenewProxyConfig{
-		Proxier: cacheProxier,
+		Proxier: cacheProxy,
 	})
 
 	for _, ln := range listeners {
@@ -896,19 +892,4 @@ func respondOk(w http.ResponseWriter, body interface{}) {
 		enc := json.NewEncoder(w)
 		enc.Encode(body)
 	}
-}
-
-// computeCacheKey results in a value that uniquely identifies a request
-// received by the agent. It does so by SHA256 hashing the marshalled JSON
-// which contains the request path, query parameters and body parameters.
-func computeCacheKey(req *http.Request) (string, error) {
-	var b bytes.Buffer
-
-	// Serialze the request
-	if err := req.Write(&b); err != nil {
-		return "", fmt.Errorf("unable to serialize request: %v", err)
-	}
-
-	sum := sha256.Sum256(b.Bytes())
-	return string(sum[:]), nil
 }

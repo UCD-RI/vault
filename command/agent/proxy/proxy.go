@@ -17,7 +17,7 @@ type Response struct {
 }
 
 // Proxier is the interface implemented by the proxy layers (e.g. caches, API
-// client wrapped) that is used to proxy agent requests.
+// client) that is used to proxy agent requests.
 type Proxier interface {
 	Send(*Request) (*Response, error)
 }

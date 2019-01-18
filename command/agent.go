@@ -2,8 +2,6 @@ package command
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,11 +36,10 @@ import (
 	"github.com/hashicorp/vault/command/agent/config"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
+	"github.com/hashicorp/vault/command/server"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
 	"github.com/hashicorp/vault/helper/logging"
-	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
-	"github.com/hashicorp/vault/helper/tlsutil"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/version"
@@ -582,7 +579,7 @@ func unixSocketListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (
 
 	props := map[string]string{"addr": addr}
 
-	return listenerWrapTLS(listener, props, config, ui)
+	return server.ListenerWrapTLS(listener, props, config, ui)
 }
 
 func tcpListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (net.Listener, map[string]string, reload.ReloadFunc, error) {
@@ -606,147 +603,9 @@ func tcpListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (net.Lis
 		return nil, nil, nil, err
 	}
 
-	ln = tcpKeepAliveListener{ln.(*net.TCPListener)}
+	ln = server.TcpKeepAliveListener{ln.(*net.TCPListener)}
 
 	props := map[string]string{"addr": addr}
 
-	return listenerWrapTLS(ln, props, config, ui)
-}
-
-// tcpKeepAliveListener sets TCP keep-alive timeouts on accepted
-// connections. It's used by ListenAndServe and ListenAndServeTLS so
-// dead TCP connections (e.g. closing laptop mid-download) eventually
-// go away.
-//
-// This is copied directly from the Go source code.
-type tcpKeepAliveListener struct {
-	*net.TCPListener
-}
-
-func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
-	tc, err := ln.AcceptTCP()
-	if err != nil {
-		return
-	}
-	tc.SetKeepAlive(true)
-	tc.SetKeepAlivePeriod(3 * time.Minute)
-	return tc, nil
-}
-
-func listenerWrapTLS(
-	ln net.Listener,
-	props map[string]string,
-	config map[string]interface{},
-	ui cli.Ui) (net.Listener, map[string]string, reload.ReloadFunc, error) {
-	props["tls"] = "disabled"
-
-	if v, ok := config["tls_disable"]; ok {
-		disabled, err := parseutil.ParseBool(v)
-		if err != nil {
-			return nil, nil, nil, errwrap.Wrapf("invalid value for 'tls_disable': {{err}}", err)
-		}
-		if disabled {
-			return ln, props, nil, nil
-		}
-	}
-
-	certFileRaw, ok := config["tls_cert_file"]
-	if !ok {
-		return nil, nil, nil, fmt.Errorf("'tls_cert_file' must be set")
-	}
-	certFile := certFileRaw.(string)
-	keyFileRaw, ok := config["tls_key_file"]
-	if !ok {
-		return nil, nil, nil, fmt.Errorf("'tls_key_file' must be set")
-	}
-	keyFile := keyFileRaw.(string)
-
-	cg := reload.NewCertificateGetter(certFile, keyFile, "")
-	if err := cg.Reload(config); err != nil {
-		// We try the key without a passphrase first and if we get an incorrect
-		// passphrase response, try again after prompting for a passphrase
-		if errwrap.Contains(err, x509.IncorrectPasswordError.Error()) {
-			var passphrase string
-			passphrase, err = ui.AskSecret(fmt.Sprintf("Enter passphrase for %s:", keyFile))
-			if err == nil {
-				cg = reload.NewCertificateGetter(certFile, keyFile, passphrase)
-				if err = cg.Reload(config); err == nil {
-					goto PASSPHRASECORRECT
-				}
-			}
-		}
-		return nil, nil, nil, errwrap.Wrapf("error loading TLS cert: {{err}}", err)
-	}
-
-PASSPHRASECORRECT:
-	var tlsvers string
-	tlsversRaw, ok := config["tls_min_version"]
-	if !ok {
-		tlsvers = "tls12"
-	} else {
-		tlsvers = tlsversRaw.(string)
-	}
-
-	tlsConf := &tls.Config{}
-	tlsConf.GetCertificate = cg.GetCertificate
-	tlsConf.NextProtos = []string{"h2", "http/1.1"}
-	tlsConf.MinVersion, ok = tlsutil.TLSLookup[tlsvers]
-	if !ok {
-		return nil, nil, nil, fmt.Errorf("'tls_min_version' value %q not supported, please specify one of [tls10,tls11,tls12]", tlsvers)
-	}
-	tlsConf.ClientAuth = tls.RequestClientCert
-
-	if v, ok := config["tls_cipher_suites"]; ok {
-		ciphers, err := tlsutil.ParseCiphers(v.(string))
-		if err != nil {
-			return nil, nil, nil, errwrap.Wrapf("invalid value for 'tls_cipher_suites': {{err}}", err)
-		}
-		tlsConf.CipherSuites = ciphers
-	}
-	if v, ok := config["tls_prefer_server_cipher_suites"]; ok {
-		preferServer, err := parseutil.ParseBool(v)
-		if err != nil {
-			return nil, nil, nil, errwrap.Wrapf("invalid value for 'tls_prefer_server_cipher_suites': {{err}}", err)
-		}
-		tlsConf.PreferServerCipherSuites = preferServer
-	}
-	var requireVerifyCerts bool
-	var err error
-	if v, ok := config["tls_require_and_verify_client_cert"]; ok {
-		requireVerifyCerts, err = parseutil.ParseBool(v)
-		if err != nil {
-			return nil, nil, nil, errwrap.Wrapf("invalid value for 'tls_require_and_verify_client_cert': {{err}}", err)
-		}
-		if requireVerifyCerts {
-			tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
-		}
-		if tlsClientCaFile, ok := config["tls_client_ca_file"]; ok {
-			caPool := x509.NewCertPool()
-			data, err := ioutil.ReadFile(tlsClientCaFile.(string))
-			if err != nil {
-				return nil, nil, nil, errwrap.Wrapf("failed to read tls_client_ca_file: {{err}}", err)
-			}
-
-			if !caPool.AppendCertsFromPEM(data) {
-				return nil, nil, nil, fmt.Errorf("failed to parse CA certificate in tls_client_ca_file")
-			}
-			tlsConf.ClientCAs = caPool
-		}
-	}
-	if v, ok := config["tls_disable_client_certs"]; ok {
-		disableClientCerts, err := parseutil.ParseBool(v)
-		if err != nil {
-			return nil, nil, nil, errwrap.Wrapf("invalid value for 'tls_disable_client_certs': {{err}}", err)
-		}
-		if disableClientCerts && requireVerifyCerts {
-			return nil, nil, nil, fmt.Errorf("'tls_disable_client_certs' and 'tls_require_and_verify_client_cert' are mutually exclusive")
-		}
-		if disableClientCerts {
-			tlsConf.ClientAuth = tls.NoClientCert
-		}
-	}
-
-	ln = tls.NewListener(ln, tlsConf)
-	props["tls"] = "enabled"
-	return ln, props, cg.Reload, nil
+	return server.ListenerWrapTLS(ln, props, config, ui)
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
 
 	"os"
 	"sort"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
 	"github.com/hashicorp/vault/command/agent/auth/approle"
@@ -29,7 +32,9 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/gcp"
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
-	"github.com/hashicorp/vault/command/agent/cache/core"
+	"github.com/hashicorp/vault/command/agent/cache"
+	"github.com/hashicorp/vault/command/agent/cache/apiproxy"
+	"github.com/hashicorp/vault/command/agent/cache/leasecache"
 	"github.com/hashicorp/vault/command/agent/config"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
@@ -38,6 +43,8 @@ import (
 	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/helper/reload"
 	"github.com/hashicorp/vault/helper/tlsutil"
+	vaulthttp "github.com/hashicorp/vault/http"
+	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/version"
 )
 
@@ -55,6 +62,9 @@ type AgentCommand struct {
 	logger    log.Logger
 
 	cleanupGuard sync.Once
+
+	// Toggles whether lease cache layer should be disabled
+	leaseCacheDisabled bool
 
 	startedCh chan (struct{}) // for tests
 
@@ -356,16 +366,34 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	core, err := core.New(&core.Config{
-		Logger:    c.logger,
-		Client:    client,
-		Listeners: listeners,
-	})
-	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error while creating core: %v", err))
-		return 1
+	mux := http.NewServeMux()
+	proxy := apiproxy.NewAPIProxy()
+
+	if !c.leaseCacheDisabled {
+		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
+			Proxier: proxy,
+			Logger:  c.logger.Named("leasecache"),
+		})
+		if err != nil {
+			c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
+			return 1
+		}
+		mux.Handle("/v1/agent/cache-clear", lc.HandleClear())
+		proxy = lc
 	}
-	core.Listen(ctx)
+
+	mux.Handle("/", handleRequest(ctx, c.client, proxy))
+
+	for _, ln := range listeners {
+		server := &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       5 * time.Minute,
+			ErrorLog:          c.logger.StandardLogger(nil),
+		}
+		go server.Serve(ln)
+	}
 
 	// Release the log gate.
 	c.logGate.Flush()
@@ -430,46 +458,54 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-/*
-func handleCacheClear(proxier cache.Proxier) http.Handler {
-		type request struct {
-			Type  string `json:"type"`
-			Value string `json:"value"`
-		}
+func handleRequest(ctx context.Context, client *api.Client, proxy cache.Proxier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxier.Send(&cache.SendRequest{
+		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
+
+		resp, err := proxy.Send(&cache.SendRequest{
 			Request: r,
+			Token:   client.Token(),
 		})
-		return
-			req := new(request)
-
-			err := jsonutil.DecodeJSONFromReader(r.Body, req)
-			if err != nil && err != io.EOF {
-				w.WriteHeader(400)
-				return
-			}
-
-			switch req.Type {
-			case "token_id", "lease_id", "request_path":
-				err = db.Evict(req.Type, req.Value)
-				if err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
-					return
-				}
-			case "all":
-				if err := db.Flush(); err != nil {
-					respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
-					return
-				}
-			default:
-				respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
-				return
-			}
-			// We've successfully cleared the cache
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
 			return
+		}
+
+		respBody, err := ioutil.ReadAll(resp.Response.Body)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
+			return
+		}
+
+		copyHeader(w.Header(), resp.Response.Header)
+		w.WriteHeader(resp.Response.StatusCode)
+		w.Write(respBody)
+		return
 	})
 }
-*/
+
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
+func respondError(w http.ResponseWriter, status int, err error) {
+	logical.AdjustErrorStatusCode(&status, err)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	resp := &vaulthttp.ErrorResponse{Errors: make([]string, 0, 1)}
+	if err != nil {
+		resp.Errors = append(resp.Errors, err.Error())
+	}
+
+	enc := json.NewEncoder(w)
+	enc.Encode(resp)
+}
 
 // rmListener is an implementation of net.Listener that forwards most
 // calls to the listener but also removes a file as part of the close. We

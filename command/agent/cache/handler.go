@@ -8,18 +8,29 @@ import (
 	"net/http"
 
 	"github.com/hashicorp/errwrap"
-	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/helper/consts"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 )
 
-func HandleRequest(ctx context.Context, client *api.Client, proxy Proxier) http.Handler {
+type Config struct {
+	Token            string
+	Proxier          Proxier
+	UseAutoAuthToken bool
+}
+
+func Handler(ctx context.Context, config *Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
 
-		resp, err := proxy.Send(&SendRequest{
+		token := r.Header.Get(consts.AuthHeaderName)
+		if token == "" && config.UseAutoAuthToken {
+			token = config.Token
+		}
+
+		resp, err := config.Proxier.Send(&SendRequest{
+			Token:   token,
 			Request: r,
-			Token:   client.Token(),
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/errwrap"
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/helper/consts"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
@@ -17,9 +20,26 @@ type Config struct {
 	Token            string
 	Proxier          Proxier
 	UseAutoAuthToken bool
+	Listeners        []net.Listener
+	Handler          *http.ServeMux
+	Logger           hclog.Logger
 }
 
-func Handler(ctx context.Context, config *Config) http.Handler {
+func Listen(ctx context.Context, config *Config) {
+	config.Handler.Handle("/", handler(ctx, config))
+	for _, ln := range config.Listeners {
+		server := &http.Server{
+			Handler:           config.Handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       5 * time.Minute,
+			ErrorLog:          config.Logger.StandardLogger(nil),
+		}
+		go server.Serve(ln)
+	}
+}
+
+func handler(ctx context.Context, config *Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
 

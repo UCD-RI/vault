@@ -94,7 +94,7 @@ func tcpListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (net.Lis
 		return nil, nil, nil, err
 	}
 
-	ln = server.TCPKeepAliveListener{ln.(*net.TCPListener)}
+	ln = server.TcpKeepAliveListener{ln.(*net.TCPListener)}
 
 	props := map[string]string{"addr": addr}
 

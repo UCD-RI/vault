@@ -372,7 +372,11 @@ func (c *AgentCommand) Run(args []string) int {
 		proxy = lc
 	}
 
-	mux.Handle("/", cache.HandleRequest(ctx, c.client, proxy))
+	mux.Handle("/", cache.Handler(ctx, &cache.Config{
+		Token:            c.client.Token(),
+		Proxier:          proxy,
+		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
+	}))
 
 	for _, ln := range listeners {
 		server := &http.Server{

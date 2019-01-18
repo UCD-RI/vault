@@ -6,12 +6,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/cache"
+	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
 // LeaseCache is an implementation of Proxier that handles
@@ -161,4 +163,40 @@ func computeCacheKey(req *http.Request) (string, error) {
 
 	sum := sha256.Sum256(b.Bytes())
 	return string(sum[:]), nil
+}
+
+// HandleClear is returns a handlerFunc that can perform cache clearing operations
+func (c *LeaseCache) HandleClear() http.Handler {
+	type request struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := new(request)
+
+		err := jsonutil.DecodeJSONFromReader(r.Body, req)
+		if err != nil && err != io.EOF {
+			w.WriteHeader(400)
+			return
+		}
+
+		switch req.Type {
+		case "token_id", "lease_id", "request_path":
+			err = c.db.Evict(req.Type, req.Value)
+			if err != nil {
+				// respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				return
+			}
+		case "all":
+			if err := c.db.Flush(); err != nil {
+				// respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
+				return
+			}
+		default:
+			// respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
+			return
+		}
+		// We've successfully cleared the cache
+		return
+	})
 }

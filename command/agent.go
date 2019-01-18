@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/kr/pretty"
 	"github.com/mitchellh/cli"
@@ -372,22 +371,14 @@ func (c *AgentCommand) Run(args []string) int {
 		proxy = lc
 	}
 
-	mux.Handle("/", cache.Handler(ctx, &cache.Config{
+	cache.Listen(ctx, &cache.Config{
 		Token:            c.client.Token(),
 		Proxier:          proxy,
 		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
-	}))
-
-	for _, ln := range listeners {
-		server := &http.Server{
-			Handler:           mux,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       30 * time.Second,
-			IdleTimeout:       5 * time.Minute,
-			ErrorLog:          c.logger.StandardLogger(nil),
-		}
-		go server.Serve(ln)
-	}
+		Listeners:        listeners,
+		Handler:          mux,
+		Logger:           c.logger.Named("cache"),
+	})
 
 	// Release the log gate.
 	c.logGate.Flush()

@@ -2,10 +2,8 @@ package command
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 
@@ -21,7 +19,6 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	log "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/auth"
 	"github.com/hashicorp/vault/command/agent/auth/alicloud"
 	"github.com/hashicorp/vault/command/agent/auth/approle"
@@ -36,12 +33,8 @@ import (
 	"github.com/hashicorp/vault/command/agent/config"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
-	"github.com/hashicorp/vault/command/server"
 	gatedwriter "github.com/hashicorp/vault/helper/gated-writer"
 	"github.com/hashicorp/vault/helper/logging"
-	"github.com/hashicorp/vault/helper/reload"
-	vaulthttp "github.com/hashicorp/vault/http"
-	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/version"
 )
 
@@ -356,7 +349,7 @@ func (c *AgentCommand) Run(args []string) int {
 	// Prepare agent listeners
 	var listeners []net.Listener
 	if len(config.Cache.Listeners) != 0 {
-		listeners, err = serverListeners(config.Cache.Listeners, c.logWriter, c.UI)
+		listeners, err = cache.ServerListeners(config.Cache.Listeners, c.logWriter, c.UI)
 		if err != nil {
 			c.UI.Error(fmt.Sprintf("Error running listeners: %v", err))
 			return 1
@@ -379,7 +372,7 @@ func (c *AgentCommand) Run(args []string) int {
 		proxy = lc
 	}
 
-	mux.Handle("/", handleRequest(ctx, c.client, proxy))
+	mux.Handle("/", cache.HandleRequest(ctx, c.client, proxy))
 
 	for _, ln := range listeners {
 		server := &http.Server{
@@ -453,159 +446,4 @@ func (c *AgentCommand) removePidFile(pidPath string) error {
 		return nil
 	}
 	return os.Remove(pidPath)
-}
-
-func handleRequest(ctx context.Context, client *api.Client, proxy cache.Proxier) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
-
-		resp, err := proxy.Send(&cache.SendRequest{
-			Request: r,
-			Token:   client.Token(),
-		})
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
-			return
-		}
-
-		respBody, err := ioutil.ReadAll(resp.Response.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-			return
-		}
-
-		copyHeader(w.Header(), resp.Response.Header)
-		w.WriteHeader(resp.Response.StatusCode)
-		w.Write(respBody)
-		return
-	})
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-func respondError(w http.ResponseWriter, status int, err error) {
-	logical.AdjustErrorStatusCode(&status, err)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	resp := &vaulthttp.ErrorResponse{Errors: make([]string, 0, 1)}
-	if err != nil {
-		resp.Errors = append(resp.Errors, err.Error())
-	}
-
-	enc := json.NewEncoder(w)
-	enc.Encode(resp)
-}
-
-// rmListener is an implementation of net.Listener that forwards most
-// calls to the listener but also removes a file as part of the close. We
-// use this to cleanup the unix domain socket on close.
-type rmListener struct {
-	net.Listener
-	Path string
-}
-
-func (l *rmListener) Close() error {
-	// Close the listener itself
-	if err := l.Listener.Close(); err != nil {
-		return err
-	}
-
-	// Remove the file
-	return os.Remove(l.Path)
-}
-
-func serverListeners(lnConfigs []*config.Listener, logger io.Writer, ui cli.Ui) ([]net.Listener, error) {
-	var listeners []net.Listener
-	var listener net.Listener
-	var err error
-	for _, lnConfig := range lnConfigs {
-		switch lnConfig.Type {
-		case "unix":
-			listener, _, _, err = unixSocketListener(lnConfig.Config, logger, ui)
-			if err != nil {
-				return nil, err
-			}
-			listeners = append(listeners, listener)
-		case "tcp":
-			listener, _, _, err := tcpListener(lnConfig.Config, logger, ui)
-			if err != nil {
-				return nil, err
-			}
-			listeners = append(listeners, listener)
-		default:
-			return nil, fmt.Errorf("unsupported listener type: %q", lnConfig.Type)
-		}
-	}
-
-	return listeners, nil
-}
-
-func unixSocketListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (net.Listener, map[string]string, reload.ReloadFunc, error) {
-	addr, ok := config["address"].(string)
-	if !ok {
-		return nil, nil, nil, fmt.Errorf("invalid address: %v", config["address"])
-	}
-
-	if addr == "" {
-		return nil, nil, nil, fmt.Errorf("address field should point to socket file path")
-	}
-
-	// Remove the socket file as it shouldn't exist for the domain socket to
-	// work
-	err := os.Remove(addr)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, nil, fmt.Errorf("failed to remove the socket file: %v", err)
-	}
-
-	listener, err := net.Listen("unix", addr)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	// Wrap the listener in rmListener so that the Unix domain socket file is
-	// removed on close.
-	listener = &rmListener{
-		Listener: listener,
-		Path:     addr,
-	}
-
-	props := map[string]string{"addr": addr}
-
-	return server.ListenerWrapTLS(listener, props, config, ui)
-}
-
-func tcpListener(config map[string]interface{}, _ io.Writer, ui cli.Ui) (net.Listener, map[string]string, reload.ReloadFunc, error) {
-	bindProto := "tcp"
-	var addr string
-	addrRaw, ok := config["address"]
-	if !ok {
-		addr = "127.0.0.1:8300"
-	} else {
-		addr = addrRaw.(string)
-	}
-
-	// If they've passed 0.0.0.0, we only want to bind on IPv4
-	// rather than golang's dual stack default
-	if strings.HasPrefix(addr, "0.0.0.0:") {
-		bindProto = "tcp4"
-	}
-
-	ln, err := net.Listen(bindProto, addr)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	ln = server.TcpKeepAliveListener{ln.(*net.TCPListener)}
-
-	props := map[string]string{"addr": addr}
-
-	return server.ListenerWrapTLS(ln, props, config, ui)
 }

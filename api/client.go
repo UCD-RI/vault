@@ -93,10 +93,6 @@ type Config struct {
 	// Note: It is not thread-safe to set this and make concurrent requests
 	// with the same client. Cloning a client will not clone this value.
 	OutputCurlString bool
-
-	// DisableAgent will make the client to ignore the VAULT_AGENT_ADDR
-	// environment variable.
-	DisableAgent bool
 }
 
 // TLSConfig contains the parameters needed to configure TLS on the HTTP client
@@ -242,9 +238,8 @@ func (c *Config) ReadEnvironment() error {
 	if v := os.Getenv(EnvVaultAddress); v != "" {
 		envAddress = v
 	}
-	// Agent's address will take precedence over Vault's address, if agent is
-	// not disabled.
-	if v := os.Getenv(EnvVaultAgentAddress); v != "" && !c.DisableAgent {
+	// Agent's address will take precedence over Vault's address
+	if v := os.Getenv(EnvVaultAgentAddress); v != "" {
 		envAddress = v
 	}
 	if v := os.Getenv(EnvVaultMaxRetries); v != "" {

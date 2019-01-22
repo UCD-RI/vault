@@ -345,7 +345,7 @@ func (c *AgentCommand) Run(args []string) int {
 	go ah.Run(ctx, method)
 	go ss.Run(ctx, ah.OutputCh, sinks)
 
-	// Prepare agent listeners
+	// Parse agent listener configurations
 	var listeners []net.Listener
 	if len(config.Cache.Listeners) != 0 {
 		listeners, err = cache.ServerListeners(config.Cache.Listeners, c.logWriter, c.UI)
@@ -355,12 +355,15 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	mux := http.NewServeMux()
+	// Create the API proxying component
 	proxy := apiproxy.New(&apiproxy.Config{
 		Logger: c.logger.Named("cache.apiproxy"),
 	})
 
+	mux := http.NewServeMux()
 	if !c.leaseCacheDisabled {
+		// Create the lease caching component and setting API proxy as its
+		// underlying layer
 		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
 			Proxier: proxy,
 			Logger:  c.logger.Named("cache.leasecache"),
@@ -369,10 +372,12 @@ func (c *AgentCommand) Run(args []string) int {
 			c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
 			return 1
 		}
+		// Add a path handler specific for the lease cache
 		mux.Handle("/v1/agent/cache-clear", lc.HandleClear())
 		proxy = lc
 	}
 
+	// Start listening to requests
 	cache.Run(ctx, &cache.Config{
 		Token:            c.client.Token(),
 		Proxier:          proxy,

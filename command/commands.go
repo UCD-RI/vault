@@ -207,11 +207,6 @@ func initCommands(ui, serverCmdUi cli.Ui, runOpts *RunOptions) {
 				ShutdownCh: MakeShutdownCh(),
 			}, nil
 		},
-		"agent ping": func() (cli.Command, error) {
-			return &AgentPingCommand{
-				BaseCommand: getBaseCommand(),
-			}, nil
-		},
 		"audit": func() (cli.Command, error) {
 			return &AuditCommand{
 				BaseCommand: getBaseCommand(),

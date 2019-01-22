@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -69,7 +70,6 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	index, err := c.db.Get("cache_key", req.CacheKey)
 	if err != nil {
 		return nil, err
-
 	}
 
 	// Cached request is found, deserialize the response and return early
@@ -101,10 +101,21 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	// after this initial read also after the write call.
 	respBody, err := ioutil.ReadAll(resp.Response.Body)
 	if err != nil {
-		c.logger.Error("unable to read the response body", "err", err)
+		c.logger.Error("unable to read the response body", "error", err)
 		return nil, err
 	}
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
+
+	// Check whether we should cache
+	cacheable, err := shouldCache(respBody)
+	if err != nil {
+		c.logger.Error("unable to parse response body to determine cacheable response", "error", err)
+		return nil, err
+	}
+
+	if !cacheable {
+		return resp, nil
+	}
 
 	// Serialize the response to store into the cache
 	var respBytes bytes.Buffer
@@ -215,4 +226,28 @@ func (c *LeaseCache) HandleClear() http.Handler {
 		// We've successfully cleared the cache
 		return
 	})
+}
+
+// shouldCache determines whether a response should be cached.
+// It will return true under any of the following conditions:
+// 1. The lease_id value exists and is not an empty string
+// 2. The auth block esists and is not nil
+func shouldCache(body []byte) (bool, error) {
+	rawBody := map[string]interface{}{}
+	err := json.Unmarshal(body, &rawBody)
+	if err != nil {
+		return false, err
+	}
+
+	if rawVal, ok := rawBody["lease_id"]; ok {
+		if leaseID, ok := rawVal.(string); ok && leaseID != "" {
+			return true, nil
+		}
+	}
+
+	if auth, ok := rawBody["auth"]; ok && auth != nil {
+		return true, nil
+	}
+
+	return false, nil
 }

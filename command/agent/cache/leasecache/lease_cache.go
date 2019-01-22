@@ -132,8 +132,6 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	renewCtx := context.WithValue(reqCtx, "key", req.CacheKey)
 	index.Context = renewCtx
 
-	fmt.Println("!!!!!!!!!!!! tokenID cached:", index.TokenID)
-
 	// Cache the receive response
 	if err := c.db.Set(index); err != nil {
 		c.logger.Error("unable to cache the proxied response", "error", err)

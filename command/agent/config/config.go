@@ -169,8 +169,6 @@ func parseListeners(result *Config, list *ast.ObjectList) error {
 			return err
 		}
 
-		fmt.Printf("listener.m: %#v\n", lnConfig)
-
 		listeners = append(listeners, &Listener{
 			Type:   lnType,
 			Config: lnConfig,

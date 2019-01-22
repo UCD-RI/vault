@@ -25,7 +25,7 @@ type Config struct {
 	Logger           hclog.Logger
 }
 
-func Listen(ctx context.Context, config *Config) {
+func Run(ctx context.Context, config *Config) {
 	config.Handler.Handle("/", handler(ctx, config))
 	for _, ln := range config.Listeners {
 		server := &http.Server{

@@ -25,6 +25,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const EnvVaultAgentAddress = "VAULT_AGENT_ADDR"
 const EnvVaultAddress = "VAULT_ADDR"
 const EnvVaultCACert = "VAULT_CACERT"
 const EnvVaultCAPath = "VAULT_CAPATH"
@@ -84,6 +85,10 @@ type Config struct {
 	// then that limiter will be used. Note that an empty Limiter
 	// is equivalent blocking all events.
 	Limiter *rate.Limiter
+
+	// DisableAgent will make the client to ignore the VAULT_AGENT_ADDR
+	// environment variable.
+	DisableAgent bool
 
 	// OutputCurlString causes the actual request to return an error of type
 	// *OutputStringError. Type asserting the error message will allow
@@ -235,6 +240,11 @@ func (c *Config) ReadEnvironment() error {
 
 	// Parse the environment variables
 	if v := os.Getenv(EnvVaultAddress); v != "" {
+		envAddress = v
+	}
+	// Agent's address will take precedence over Vault's address, if agent is
+	// not disabled.
+	if v := os.Getenv(EnvVaultAgentAddress); v != "" && !c.DisableAgent {
 		envAddress = v
 	}
 	if v := os.Getenv(EnvVaultMaxRetries); v != "" {
@@ -391,16 +401,32 @@ func NewClient(c *Config) (*Client, error) {
 	c.modifyLock.Lock()
 	defer c.modifyLock.Unlock()
 
-	u, err := url.Parse(c.Address)
-	if err != nil {
-		return nil, err
-	}
+	var u *url.URL
+	var err error
 
-	if c.HttpClient == nil {
-		c.HttpClient = def.HttpClient
-	}
-	if c.HttpClient.Transport == nil {
-		c.HttpClient.Transport = def.HttpClient.Transport
+	// If address begins with a `/`, treat it as the socket file path and set
+	// the HttpClient's transport with a socket dialer.
+	switch {
+	case strings.HasPrefix(c.Address, "/"):
+		c.HttpClient = &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(context.Context, string, string) (net.Conn, error) {
+					return net.Dial("unix", c.Address)
+				},
+			},
+		}
+	default:
+		u, err = url.Parse(c.Address)
+		if err != nil {
+			return nil, err
+		}
+
+		if c.HttpClient == nil {
+			c.HttpClient = def.HttpClient
+		}
+		if c.HttpClient.Transport == nil {
+			c.HttpClient.Transport = def.HttpClient.Transport
+		}
 	}
 
 	client := &Client{

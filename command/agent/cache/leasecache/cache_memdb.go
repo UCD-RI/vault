@@ -13,7 +13,7 @@ type CacheMemDB struct {
 	db *memdb.MemDB
 }
 
-func NewCacheMemDB() (Cache, error) {
+func NewCacheMemDB() (*CacheMemDB, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err

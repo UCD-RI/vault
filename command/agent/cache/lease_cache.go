@@ -24,7 +24,7 @@ import (
 type LeaseCache struct {
 	underlying Proxier
 	logger     hclog.Logger
-	db         leasecache.Cache
+	db         *leasecache.CacheMemDB
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
@@ -36,10 +36,7 @@ type LeaseCacheConfig struct {
 
 // NewLeaseCache creates a new instance of a LeaseCache.
 func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
-	dbConf := &leasecache.Config{
-		CacheType: leasecache.CacheTypeMemDB,
-	}
-	db, err := leasecache.New(dbConf)
+	db, err := leasecache.NewCacheMemDB()
 	if err != nil {
 		return nil, err
 	}

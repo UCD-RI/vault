@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/cache/leasecache"
+	cachememdb "github.com/hashicorp/vault/command/agent/cache/leasecache"
 	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
@@ -24,7 +24,7 @@ import (
 type LeaseCache struct {
 	underlying Proxier
 	logger     hclog.Logger
-	db         *leasecache.CacheMemDB
+	db         *cachememdb.CacheMemDB
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
@@ -36,7 +36,7 @@ type LeaseCacheConfig struct {
 
 // NewLeaseCache creates a new instance of a LeaseCache.
 func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
-	db, err := leasecache.NewCacheMemDB()
+	db, err := cachememdb.NewCacheMemDB()
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	c.logger.Info("response not found in the cache, caching response")
 
 	// Build the index to cache based on the response received
-	index = &leasecache.Index{
+	index = &cachememdb.Index{
 		CacheKey:    req.CacheKey,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,

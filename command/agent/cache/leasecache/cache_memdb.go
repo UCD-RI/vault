@@ -1,4 +1,4 @@
-package leasecache
+package cachememdb
 
 import (
 	"errors"

@@ -16,11 +16,14 @@ type Cache interface {
 	// Set stores the given index in the cache
 	Set(index *Index) error
 
-	// Get returns the index based on the index type and the index values
+	// Get returns the index based on the index type and the index value
 	Get(indexName string, indexValue string) (*Index, error)
 
-	// Evict removes an index based on the index type and the index values
+	// Evict removes an index based on the index type and the index value
 	Evict(indexName string, indexValue string) error
+
+	// EvictAll removes an one or more indexex based on the index type and index value
+	EvictAll(indexName string, indexValue string) error
 
 	// EvictByPrefix removes one or more indexes from the cache based on the
 	// index name and the prefix of the index value.

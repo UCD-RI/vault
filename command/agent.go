@@ -371,7 +371,7 @@ func (c *AgentCommand) Run(args []string) int {
 		proxy = lc
 	}
 
-	cache.Listen(ctx, &cache.Config{
+	cache.Run(ctx, &cache.Config{
 		Token:            c.client.Token(),
 		Proxier:          proxy,
 		UseAutoAuthToken: config.Cache.UseAutoAuthToken,

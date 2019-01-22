@@ -79,7 +79,7 @@ func (c *BaseCommand) Client() (*api.Client, error) {
 	if c.flagAddress != "" {
 		config.Address = c.flagAddress
 	}
-	if c.flagAgentAddress != "" {
+	if c.flagAgentAddress != "" && !config.DisableAgent {
 		config.Address = c.flagAgentAddress
 	}
 

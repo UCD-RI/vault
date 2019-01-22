@@ -93,6 +93,10 @@ type Config struct {
 	// Note: It is not thread-safe to set this and make concurrent requests
 	// with the same client. Cloning a client will not clone this value.
 	OutputCurlString bool
+
+	// DisableAgent will make the client to ignore the VAULT_AGENT_ADDR
+	// environment variable.
+	DisableAgent bool
 }
 
 // TLSConfig contains the parameters needed to configure TLS on the HTTP client
@@ -238,8 +242,9 @@ func (c *Config) ReadEnvironment() error {
 	if v := os.Getenv(EnvVaultAddress); v != "" {
 		envAddress = v
 	}
-	// Agent's address will take precedence over Vault's address
-	if v := os.Getenv(EnvVaultAgentAddress); v != "" {
+	// Agent's address will take precedence over Vault's address, if agent is
+	// not disabled.
+	if v := os.Getenv(EnvVaultAgentAddress); v != "" && !c.DisableAgent {
 		envAddress = v
 	}
 	if v := os.Getenv(EnvVaultMaxRetries); v != "" {
@@ -396,31 +401,32 @@ func NewClient(c *Config) (*Client, error) {
 	c.modifyLock.Lock()
 	defer c.modifyLock.Unlock()
 
-	// If address begins with a `/`, treat it as a socket file path and set
-	// the HttpClient's transport to the corresponding socket dialer.
-	if strings.HasPrefix(c.Address, "/") {
-		socketFilePath := c.Address
+	var u *url.URL
+	var err error
+
+	// If address begins with a `/`, treat it as the socket file path and set
+	// the HttpClient's transport with a socket dialer.
+	switch {
+	case strings.HasPrefix(c.Address, "/"):
 		c.HttpClient = &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(context.Context, string, string) (net.Conn, error) {
-					return net.Dial("unix", socketFilePath)
+					return net.Dial("unix", c.Address)
 				},
 			},
 		}
-		// Set the unix address for URL parsing below
-		c.Address = "http://unix"
-	}
+	default:
+		u, err = url.Parse(c.Address)
+		if err != nil {
+			return nil, err
+		}
 
-	u, err := url.Parse(c.Address)
-	if err != nil {
-		return nil, err
-	}
-
-	if c.HttpClient == nil {
-		c.HttpClient = def.HttpClient
-	}
-	if c.HttpClient.Transport == nil {
-		c.HttpClient.Transport = def.HttpClient.Transport
+		if c.HttpClient == nil {
+			c.HttpClient = def.HttpClient
+		}
+		if c.HttpClient.Transport == nil {
+			c.HttpClient.Transport = def.HttpClient.Transport
+		}
 	}
 
 	client := &Client{

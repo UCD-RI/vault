@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"context"
 	"io/ioutil"
 
@@ -25,34 +24,27 @@ func NewAPIProxy(config *APIProxyConfig) Proxier {
 	}
 }
 
-func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
+func (ap *APIProxy) Send(req *SendRequest) (*SendResponse, error) {
 	client, err := api.NewClient(api.DefaultConfig())
 	if err != nil {
 		return nil, err
 	}
 	client.SetToken(req.Token)
-	client.SetHeaders(req.Request.Header)
 
 	fwReq := client.NewRequest(req.Request.Method, req.Request.URL.Path)
-	fwReq.BodyBytes = req.RequestBody
+	fwReq.BodyBytes, err = ioutil.ReadAll(req.Request.Body)
+	if err != nil {
+		return nil, err
+	}
 
 	// Make the request to Vault and get the response
-	ap.logger.Info("forwarding request", "path", req.Request.URL.Path)
-	resp, err := client.RawRequestWithContext(ctx, fwReq)
+	ap.logger.Info("forwarding request", "path", req.Request.RequestURI)
+	resp, err := client.RawRequestWithContext(context.Background(), fwReq)
 	if err != nil {
 		return nil, err
 	}
-
-	// Parse and reset response body
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		ap.logger.Error("failed to read request body", "error", err)
-		return nil, err
-	}
-	resp.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
 	return &SendResponse{
-		Response:     resp,
-		ResponseBody: respBody,
+		Response: resp,
 	}, nil
 }

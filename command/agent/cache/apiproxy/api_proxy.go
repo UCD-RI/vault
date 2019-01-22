@@ -20,12 +20,7 @@ func NewAPIProxy() cache.Proxier {
 func (ap *APIProxy) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	fmt.Printf("===== APIProxy.Send() req: %#v\n", req)
 
-	config := api.DefaultConfig()
-
-	// Disable agent to avoid a loopback
-	config.DisableAgent = true
-
-	client, err := api.NewClient(config)
+	client, err := api.NewClient(api.DefaultConfig())
 	if err != nil {
 		return nil, err
 	}

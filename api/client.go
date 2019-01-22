@@ -86,10 +86,6 @@ type Config struct {
 	// is equivalent blocking all events.
 	Limiter *rate.Limiter
 
-	// DisableAgent will make the client to ignore the VAULT_AGENT_ADDR
-	// environment variable.
-	DisableAgent bool
-
 	// OutputCurlString causes the actual request to return an error of type
 	// *OutputStringError. Type asserting the error message will allow
 	// fetching a cURL-compatible string for the operation.
@@ -242,9 +238,8 @@ func (c *Config) ReadEnvironment() error {
 	if v := os.Getenv(EnvVaultAddress); v != "" {
 		envAddress = v
 	}
-	// Agent's address will take precedence over Vault's address, if agent is
-	// not disabled.
-	if v := os.Getenv(EnvVaultAgentAddress); v != "" && !c.DisableAgent {
+	// Agent's address will take precedence over Vault's address
+	if v := os.Getenv(EnvVaultAgentAddress); v != "" {
 		envAddress = v
 	}
 	if v := os.Getenv(EnvVaultMaxRetries); v != "" {

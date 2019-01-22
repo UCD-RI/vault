@@ -1,4 +1,4 @@
-package apiproxy
+package cache
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/cache"
 )
 
 // APIProxy is an implementation of the proxier interface that is used to
@@ -15,17 +14,17 @@ type APIProxy struct {
 	logger hclog.Logger
 }
 
-type Config struct {
+type APIProxyConfig struct {
 	Logger hclog.Logger
 }
 
-func New(config *Config) cache.Proxier {
+func NewAPIProxy(config *APIProxyConfig) Proxier {
 	return &APIProxy{
 		logger: config.Logger,
 	}
 }
 
-func (ap *APIProxy) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
+func (ap *APIProxy) Send(req *SendRequest) (*SendResponse, error) {
 	client, err := api.NewClient(api.DefaultConfig())
 	if err != nil {
 		return nil, err
@@ -45,7 +44,7 @@ func (ap *APIProxy) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 		return nil, err
 	}
 
-	return &cache.SendResponse{
+	return &SendResponse{
 		Response: resp,
 	}, nil
 }

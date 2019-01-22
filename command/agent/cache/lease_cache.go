@@ -1,4 +1,4 @@
-package leasecache
+package cache
 
 import (
 	"bufio"
@@ -14,8 +14,7 @@ import (
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/cache"
-	"github.com/hashicorp/vault/command/agent/cache/httputil"
+	"github.com/hashicorp/vault/command/agent/cache/leasecache"
 	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
@@ -23,24 +22,24 @@ import (
 // the caching of responses. It passes the incoming request
 // to an underlying Proxier implementation.
 type LeaseCache struct {
-	underlying cache.Proxier
+	underlying Proxier
 	logger     hclog.Logger
-	db         Cache
+	db         leasecache.Cache
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
-// LeaseCache.
+// Lease
 type LeaseCacheConfig struct {
-	Proxier cache.Proxier
+	Proxier Proxier
 	Logger  hclog.Logger
 }
 
 // NewLeaseCache creates a new instance of a LeaseCache.
 func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
-	dbConf := &Config{
-		CacheType: CacheTypeMemDB,
+	dbConf := &leasecache.Config{
+		CacheType: leasecache.CacheTypeMemDB,
 	}
-	db, err := New(dbConf)
+	db, err := leasecache.New(dbConf)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +56,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // Send performs a cache lookup on the incoming request. If it's a cache hit, it
 // will return the cached response, otherwise it will delegate to the underlygin
 // Proxier and cache the received response.
-func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
+func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	// Compute the CacheKey
 	cacheKey, err := computeCacheKey(req.Request)
 	if err != nil {
@@ -83,7 +82,7 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 			return nil, err
 		}
 
-		return &cache.SendResponse{
+		return &SendResponse{
 			Response: &api.Response{
 				Response: resp,
 			},
@@ -129,7 +128,7 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	c.logger.Info("response not found in the cache, caching response")
 
 	// Build the index to cache based on the response received
-	index = &Index{
+	index = &leasecache.Index{
 		CacheKey:    req.CacheKey,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,
@@ -199,28 +198,28 @@ func (c *LeaseCache) HandleClear() http.Handler {
 		case "request_path":
 			err = c.db.EvictByPrefix(req.Type, req.Value)
 			if err != nil {
-				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict indexes from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict indexes from cache: {{err}}", err))
 				return
 			}
 		case "token_id":
 			err = c.db.EvictAll(req.Type, req.Value)
 			if err != nil {
-				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
 				return
 			}
 		case "lease_id":
 			err = c.db.Evict(req.Type, req.Value)
 			if err != nil {
-				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
 				return
 			}
 		case "all":
 			if err := c.db.Flush(); err != nil {
-				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
 				return
 			}
 		default:
-			httputil.RespondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
+			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
 			return
 		}
 		// We've successfully cleared the cache

@@ -27,8 +27,6 @@ import (
 	"github.com/hashicorp/vault/command/agent/auth/jwt"
 	"github.com/hashicorp/vault/command/agent/auth/kubernetes"
 	"github.com/hashicorp/vault/command/agent/cache"
-	"github.com/hashicorp/vault/command/agent/cache/apiproxy"
-	"github.com/hashicorp/vault/command/agent/cache/leasecache"
 	"github.com/hashicorp/vault/command/agent/config"
 	"github.com/hashicorp/vault/command/agent/sink"
 	"github.com/hashicorp/vault/command/agent/sink/file"
@@ -356,7 +354,7 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Create the API proxier
-	proxy := apiproxy.New(&apiproxy.Config{
+	proxy := cache.NewAPIProxy(&cache.APIProxyConfig{
 		Logger: c.logger.Named("cache.apiproxy"),
 	})
 
@@ -364,7 +362,7 @@ func (c *AgentCommand) Run(args []string) int {
 	if !c.leaseCacheDisabled {
 		// Create the lease cache proxier and set its underlying proxier to
 		// the API proxier.
-		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
+		lc, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
 			Proxier: proxy,
 			Logger:  c.logger.Named("cache.leasecache"),
 		})

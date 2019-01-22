@@ -362,8 +362,8 @@ func (c *AgentCommand) Run(args []string) int {
 
 	mux := http.NewServeMux()
 	if !c.leaseCacheDisabled {
-		// Create the lease caching component and setting API proxy as its
-		// underlying layer
+		// Create the lease caching component and set API proxy as its
+		// underlying proxier
 		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
 			Proxier: proxy,
 			Logger:  c.logger.Named("cache.leasecache"),

@@ -812,38 +812,3 @@ START:
 
 	return result, nil
 }
-
-/*
-func (c *Client) Request(r *http.Request) (*Response, error) {
-	req := c.NewRequest(r.Method, r.URL.Path)
-	err := req.SetJSONBody(req.Body)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	defer cancelFunc()
-	resp, err := c.RawRequestWithContext(ctx, req)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
-	if resp != nil && resp.StatusCode == 404 {
-		secret, parseErr := ParseSecret(resp.Body)
-		switch parseErr {
-		case nil:
-		case io.EOF:
-			return nil, nil
-		default:
-			return nil, err
-		}
-		if secret != nil && (len(secret.Warnings) > 0 || len(secret.Data) > 0) {
-			return secret, nil
-		}
-	}
-	if err != nil {
-		return nil, 0, nil, err
-	}
-
-	return ParseSecret(resp.Body)
-}
-*/

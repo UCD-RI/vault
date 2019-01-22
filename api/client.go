@@ -347,31 +347,6 @@ type Client struct {
 	policyOverride     bool
 }
 
-func NewAgentClient(client *Client) (*Client, error) {
-	var err error
-	if client == nil {
-		client, err = NewClient(nil)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	socketFilePath := os.Getenv("VAULT_AGENT_ADDR")
-	if socketFilePath == "" {
-		return nil, fmt.Errorf("socket file not specified")
-	}
-
-	client.config.HttpClient = &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(context.Context, string, string) (net.Conn, error) {
-				return net.Dial("unix", socketFilePath)
-			},
-		},
-	}
-
-	return client, nil
-}
-
 // NewClient returns a new client for the given configuration.
 //
 // If the configuration is nil, Vault will use configuration from

@@ -356,12 +356,14 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	mux := http.NewServeMux()
-	proxy := apiproxy.NewAPIProxy()
+	proxy := apiproxy.New(&apiproxy.Config{
+		Logger: c.logger.Named("cache.apiproxy"),
+	})
 
 	if !c.leaseCacheDisabled {
 		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
 			Proxier: proxy,
-			Logger:  c.logger.Named("leasecache"),
+			Logger:  c.logger.Named("cache.leasecache"),
 		})
 		if err != nil {
 			c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
@@ -377,7 +379,7 @@ func (c *AgentCommand) Run(args []string) int {
 		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
 		Listeners:        listeners,
 		Handler:          mux,
-		Logger:           c.logger.Named("cache"),
+		Logger:           c.logger.Named("cache.handler"),
 	})
 
 	// Release the log gate.

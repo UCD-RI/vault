@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -41,7 +40,7 @@ func Run(ctx context.Context, config *Config) {
 
 func handler(ctx context.Context, config *Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("===== Agent.handleRequest: %q\n", r.RequestURI)
+		config.Logger.Info("received request", "path", r.RequestURI)
 
 		token := r.Header.Get(consts.AuthHeaderName)
 		if token == "" && config.UseAutoAuthToken {

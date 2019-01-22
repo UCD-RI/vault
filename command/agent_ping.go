@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hashicorp/vault/api"
 	"github.com/mitchellh/cli"
 	"github.com/posener/complete"
 )
@@ -14,14 +13,6 @@ var _ cli.CommandAutocomplete = (*AgentCommand)(nil)
 
 type AgentPingCommand struct {
 	*BaseCommand
-}
-
-func (c *AgentPingCommand) Client() (*api.Client, error) {
-	client, err := c.BaseCommand.Client()
-	if err != nil {
-		return nil, err
-	}
-	return api.NewAgentClient(client)
 }
 
 func (c *AgentPingCommand) Synopsis() string {

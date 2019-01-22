@@ -371,8 +371,8 @@ func NewClient(c *Config) (*Client, error) {
 	c.modifyLock.Lock()
 	defer c.modifyLock.Unlock()
 
-	// If address begins with a `/`, treat it as the socket file path and set
-	// the HttpClient's transport with a socket dialer.
+	// If address begins with a `/`, treat it as a socket file path and set
+	// the HttpClient's transport to the corresponding socket dialer.
 	if strings.HasPrefix(c.Address, "/") {
 		socketFilePath := c.Address
 		c.HttpClient = &http.Client{
@@ -382,6 +382,7 @@ func NewClient(c *Config) (*Client, error) {
 				},
 			},
 		}
+		// Set the unix address for URL parsing below
 		c.Address = "http://unix"
 	}
 

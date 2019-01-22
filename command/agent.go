@@ -355,15 +355,15 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	// Create the API proxying component
+	// Create the API proxier
 	proxy := apiproxy.New(&apiproxy.Config{
 		Logger: c.logger.Named("cache.apiproxy"),
 	})
 
 	mux := http.NewServeMux()
 	if !c.leaseCacheDisabled {
-		// Create the lease caching component and set API proxy as its
-		// underlying proxier
+		// Create the lease cache proxier and set its underlying proxier to
+		// the API proxier.
 		lc, err := leasecache.NewLeaseCache(&leasecache.LeaseCacheConfig{
 			Proxier: proxy,
 			Logger:  c.logger.Named("cache.leasecache"),
@@ -386,6 +386,14 @@ func (c *AgentCommand) Run(args []string) int {
 		Handler:          mux,
 		Logger:           c.logger.Named("cache.handler"),
 	})
+
+	// Ensure that listeners are closed in all the exits
+	listenerCloseFunc := func() {
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	}
+	defer c.cleanupGuard.Do(listenerCloseFunc)
 
 	// Release the log gate.
 	c.logGate.Flush()
@@ -411,9 +419,6 @@ func (c *AgentCommand) Run(args []string) int {
 		cancelFunc()
 		<-ah.DoneCh
 		<-ss.DoneCh
-		for _, ln := range listeners {
-			ln.Close()
-		}
 	}
 
 	return 0

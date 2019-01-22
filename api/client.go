@@ -371,32 +371,30 @@ func NewClient(c *Config) (*Client, error) {
 	c.modifyLock.Lock()
 	defer c.modifyLock.Unlock()
 
-	var u *url.URL
-	var err error
-
 	// If address begins with a `/`, treat it as the socket file path and set
 	// the HttpClient's transport with a socket dialer.
-	switch {
-	case strings.HasPrefix(c.Address, "/"):
+	if strings.HasPrefix(c.Address, "/") {
+		socketFilePath := c.Address
 		c.HttpClient = &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(context.Context, string, string) (net.Conn, error) {
-					return net.Dial("unix", c.Address)
+					return net.Dial("unix", socketFilePath)
 				},
 			},
 		}
-	default:
-		u, err = url.Parse(c.Address)
-		if err != nil {
-			return nil, err
-		}
+		c.Address = "http://unix"
+	}
 
-		if c.HttpClient == nil {
-			c.HttpClient = def.HttpClient
-		}
-		if c.HttpClient.Transport == nil {
-			c.HttpClient.Transport = def.HttpClient.Transport
-		}
+	u, err := url.Parse(c.Address)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.HttpClient == nil {
+		c.HttpClient = def.HttpClient
+	}
+	if c.HttpClient.Transport == nil {
+		c.HttpClient.Transport = def.HttpClient.Transport
 	}
 
 	client := &Client{

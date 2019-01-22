@@ -10,9 +10,11 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/agent/cache"
+	"github.com/hashicorp/vault/command/agent/cache/httputil"
 	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
@@ -130,6 +132,8 @@ func (c *LeaseCache) Send(req *cache.SendRequest) (*cache.SendResponse, error) {
 	renewCtx := context.WithValue(reqCtx, "key", req.CacheKey)
 	index.Context = renewCtx
 
+	fmt.Println("!!!!!!!!!!!! tokenID cached:", index.TokenID)
+
 	// Cache the receive response
 	if err := c.db.Set(index); err != nil {
 		c.logger.Error("unable to cache the proxied response", "error", err)
@@ -172,6 +176,8 @@ func (c *LeaseCache) HandleClear() http.Handler {
 		Value string `json:"value"`
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.logger.Trace("processing cache-clear request")
+
 		req := new(request)
 
 		err := jsonutil.DecodeJSONFromReader(r.Body, req)
@@ -181,19 +187,31 @@ func (c *LeaseCache) HandleClear() http.Handler {
 		}
 
 		switch req.Type {
-		case "token_id", "lease_id", "request_path":
+		case "request_path":
+			err = c.db.EvictByPrefix(req.Type, req.Value)
+			if err != nil {
+				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict indexes from cache: {{err}}", err))
+				return
+			}
+		case "token_id":
+			err = c.db.EvictAll(req.Type, req.Value)
+			if err != nil {
+				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				return
+			}
+		case "lease_id":
 			err = c.db.Evict(req.Type, req.Value)
 			if err != nil {
-				// respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
 				return
 			}
 		case "all":
 			if err := c.db.Flush(); err != nil {
-				// respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
+				httputil.RespondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
 				return
 			}
 		default:
-			// respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
+			httputil.RespondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
 			return
 		}
 		// We've successfully cleared the cache

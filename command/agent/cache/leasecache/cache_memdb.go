@@ -140,24 +140,34 @@ func (c *CacheMemDB) Evict(iName string, indexValue string) error {
 	return nil
 }
 
+func (c *CacheMemDB) EvictAll(iName, indexValue string) error {
+	return c.batchEvict(iName, indexValue)
+}
+
+func (c *CacheMemDB) EvictByPrefix(iName, indexPrefix string) error {
+	lookupPrefix := indexPrefix + "_prefix"
+	return c.batchEvict(iName, lookupPrefix)
+}
+
+func (c *CacheMemDB) batchEvict(name, value string) error {
+	txn := c.db.Txn(true)
+	defer txn.Abort()
+
+	_, err := txn.DeleteAll("indexer", name, value)
+	if err != nil {
+		return fmt.Errorf("unable to delete cache indexes: %v", err)
+	}
+
+	txn.Commit()
+
+	return nil
+}
+
 func (c *CacheMemDB) Flush() error {
 	newDB, err := newDB()
 	if err != nil {
 		return err
 	}
 	c.db = newDB
-	return nil
-}
-
-func (c *CacheMemDB) EvictByPrefix(iName, indexPrefix string) error {
-	txn := c.db.Txn(true)
-	defer txn.Abort()
-
-	lookupPrefix := indexPrefix + "_prefix"
-	_, err := txn.DeleteAll("indexer", iName, lookupPrefix)
-	if err != nil {
-		return fmt.Errorf("unable to delete cache indexes for prefix %q: %v", indexPrefix, err)
-	}
-
 	return nil
 }

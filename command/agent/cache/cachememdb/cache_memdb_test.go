@@ -124,7 +124,7 @@ func TestCacheMemDB_Set(t *testing.T) {
 				TokenID:     "bar",
 				LeaseID:     "baz",
 				RequestPath: "/v1/request/path",
-				Context:     context.Background(),
+				RenewCtx:    context.Background(),
 			},
 			false,
 		},
@@ -155,7 +155,7 @@ func TestCacheMemDB_Evict(t *testing.T) {
 		TokenID:     "bar",
 		LeaseID:     "baz",
 		RequestPath: "/v1/request/path",
-		Context:     context.Background(),
+		RenewCtx:    context.Background(),
 	}
 
 	testCases := []struct {
@@ -241,14 +241,14 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 			TokenID:     "bar",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path/1",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 		&Index{
 			CacheKey:    "key2",
 			TokenID:     "bar",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path/2",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 	}
 
@@ -258,14 +258,14 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 			TokenID:     "token1",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 		&Index{
 			CacheKey:    "key2",
 			TokenID:     "token2",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 	}
 
@@ -351,14 +351,14 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			TokenID:     "token2",
 			LeaseID:     "baz/1",
 			RequestPath: "/v1/request/path",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 		&Index{
 			CacheKey:    "key2",
 			TokenID:     "token2",
 			LeaseID:     "baz/2",
 			RequestPath: "/v1/request/path",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 	}
 
@@ -368,14 +368,14 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			TokenID:     "token1",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path/1",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 		&Index{
 			CacheKey:    "key2",
 			TokenID:     "token2",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path/2",
-			Context:     context.Background(),
+			RenewCtx:    context.Background(),
 		},
 	}
 

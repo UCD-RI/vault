@@ -114,7 +114,8 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	// Serialize the response to store into the cache
 	var respBytes bytes.Buffer
-	if err := resp.Response.Write(&respBytes); err != nil {
+	err = resp.Response.Write(&respBytes)
+	if err != nil {
 		c.logger.Error("unable to serialize response", "error", err)
 		return nil, err
 	}
@@ -129,22 +130,142 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,
 		Response:    respBytes.Bytes(),
+		RenewCtx:    context.WithValue(ctx, struct{}{}, cacheKey),
 	}
 
-	// TODO: Not sure what to put in as value. The goal is only to derive a
-	// renewal specific context and nothing else. The value probably won't
-	// be used at all.
-	reqCtx := req.Request.Context()
-	renewCtx := context.WithValue(reqCtx, "key", cacheKey)
-	index.Context = renewCtx
+	// Start renewing the secret in the response
+	go c.startRenewing(index.RenewCtx, req, respBody)
 
 	// Cache the receive response
-	if err := c.db.Set(index); err != nil {
+	err = c.db.Set(index)
+	if err != nil {
 		c.logger.Error("unable to cache the proxied response", "error", err)
 		return nil, err
 	}
 
 	return resp, nil
+}
+
+func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBody []byte) {
+	secret, err := api.ParseSecret(bytes.NewBuffer(respBody))
+	if err != nil {
+		c.logger.Error("failed to parse secret from response body", "error", err)
+		return
+	}
+
+	/*
+		// Start renewals after half the lease duration is exhausted
+		// TODO: Add jitter
+		leaseDuration := secret.LeaseDuration
+		if secret.Auth != nil {
+			leaseDuration = secret.Auth.LeaseDuration
+		}
+		contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(leaseDuration/2))
+	*/
+
+	// Fast path for shutdown
+	select {
+	case <-ctx.Done():
+		c.logger.Info("shutdown triggered, not starting the renewer")
+		return
+	default:
+	}
+
+	renewFunc := func(ctx context.Context, secret *api.Secret) {
+		client, err := api.NewClient(api.DefaultConfig())
+		if err != nil {
+			c.logger.Error("failed to create API client", "error", err)
+			return
+		}
+		client.SetToken(req.Token)
+
+		renewer, err := client.NewRenewer(&api.RenewerInput{
+			Secret: secret,
+		})
+		if err != nil {
+			c.logger.Error("failed to create secret renewer", "error", err)
+			return
+		}
+		go renewer.Renew()
+
+		for {
+			select {
+			case <-ctx.Done():
+				c.logger.Info("shutdown triggered, stopping renewer")
+				renewer.Stop()
+				return
+			case err := <-renewer.DoneCh():
+				if err != nil {
+					c.logger.Error("failed to renew secret", "error", err)
+					return
+				}
+				// TODO: Renewal process is complete. But this doesn't mean
+				// that the cache should evict the response right away. It
+				// should stay until its last bits of lease duration is
+				// exhausted.
+				err = c.db.Evict("cache_key", ctx.Value(struct{}{}).(string))
+				if err != nil {
+					c.logger.Error("failed to evict index", "error", err)
+				}
+				return
+			case renewal := <-renewer.RenewCh():
+				c.logger.Info("renewal received; updating cache")
+				err = c.updateResponse(ctx, renewal)
+				if err != nil {
+					c.logger.Error("failed to handle renewal", "error", err)
+					return
+				}
+			}
+		}
+	}
+	go renewFunc(ctx, secret)
+}
+
+func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutput) error {
+	// Get the cache key from the renewal context
+	cacheKey := ctx.Value(struct{}{}).(string)
+
+	// Get the cached index
+	index, err := c.db.Get("cache_key", cacheKey)
+	if err != nil {
+		return err
+	}
+	if index == nil {
+		return fmt.Errorf("missing cache entry for key: %q", cacheKey)
+	}
+
+	// Read the response from the index
+	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(index.Response)), nil)
+	if err != nil {
+		c.logger.Error("unable to deserialize response", "error", err)
+		return err
+	}
+
+	// Update the body in the reponse by the renewed secret
+	bodyBytes, err := json.Marshal(renewal.Secret)
+	if err != nil {
+		return err
+	}
+	resp.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+	resp.ContentLength = int64(len(bodyBytes))
+
+	// Serialize the response
+	var respBytes bytes.Buffer
+	err = resp.Write(&respBytes)
+	if err != nil {
+		c.logger.Error("unable to serialize updated response", "error", err)
+		return err
+	}
+
+	// Update the response in the index and set it in the cache
+	index.Response = respBytes.Bytes()
+	err = c.db.Set(index)
+	if err != nil {
+		c.logger.Error("unable to cache the proxied response", "error", err)
+		return err
+	}
+
+	return nil
 }
 
 // computeCacheKey results in a value that uniquely identifies a request

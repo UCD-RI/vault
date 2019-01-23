@@ -5,31 +5,32 @@ import "context"
 // Index holds the response to be cached along with multiple other values that
 // serve as pointers to refer back to this index.
 type Index struct {
-	// Response is the serialized response object that the agent is caching
-	Response []byte
-
 	// CacheKey is a value that uniquely represents the request held by this
 	// index. This is computed by serializing and hashing the response object.
+	// Required: true, Unique: true
 	CacheKey string
 
-	// LeaseID is the identifier of the lease in Vault, that belongs to the
-	// response held by this index
-	LeaseID string
+	// TokenID is the token fetched the response held by this index
+	// Required: true, Unique: false
+	TokenID string
 
 	// RequestPath is the path of the request that resulted in the response
-	// held by this index
+	// held by this index.
+	// Required: true, Unique: false
 	RequestPath string
 
-	// TokenID is the token fetched the response held by this index
-	TokenID string
+	// LeaseID is the identifier of the lease in Vault, that belongs to the
+	// response held by this index.
+	// Required: false, Unique: true
+	LeaseID string
+
+	// Response is the serialized response object that the agent is caching.
+	Response []byte
 
 	// RenewCtx is the context object for a goroutine that manages the renewal
 	// of the secret that belongs to the response in this index. This context
 	// is used to stop the renewal process during cache invalidations.
 	RenewCtx context.Context
-
-	// ID is the identifier for the index
-	ID string
 }
 
 type IndexName uint32

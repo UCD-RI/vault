@@ -47,7 +47,7 @@ func handler(ctx context.Context, config *Config) http.Handler {
 			token = config.Token
 		}
 
-		resp, err := config.Proxier.Send(&SendRequest{
+		resp, err := config.Proxier.Send(ctx, &SendRequest{
 			Token:   token,
 			Request: r,
 		})

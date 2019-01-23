@@ -53,7 +53,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // Send performs a cache lookup on the incoming request. If it's a cache hit, it
 // will return the cached response, otherwise it will delegate to the
 // underlying Proxier and cache the received response.
-func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
+func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	// Compute the CacheKey
 	cacheKey, err := computeCacheKey(req.Request)
 	if err != nil {
@@ -86,7 +86,7 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	}
 
 	// Pass the request down
-	resp, err := c.proxier.Send(req)
+	resp, err := c.proxier.Send(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +125,7 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
+		CacheKey:    cacheKey,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,
 		Response:    respBytes.Bytes(),

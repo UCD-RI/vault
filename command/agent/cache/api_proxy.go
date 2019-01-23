@@ -24,7 +24,7 @@ func NewAPIProxy(config *APIProxyConfig) Proxier {
 	}
 }
 
-func (ap *APIProxy) Send(req *SendRequest) (*SendResponse, error) {
+func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	client, err := api.NewClient(api.DefaultConfig())
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/hashicorp/vault/api"
@@ -20,5 +21,5 @@ type SendResponse struct {
 // would serve the request received by the agent. The components that implement
 // this interface are RenewProxy, Cache and APIProxy.
 type Proxier interface {
-	Send(*SendRequest) (*SendResponse, error)
+	Send(ctx context.Context, req *SendRequest) (*SendResponse, error)
 }

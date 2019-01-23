@@ -190,12 +190,12 @@ func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBo
 			return
 		}
 		go renewer.Renew()
+		defer renewer.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				c.logger.Info("shutdown triggered, stopping renewer")
-				renewer.Stop()
 				return
 			case err := <-renewer.DoneCh():
 				if err != nil {

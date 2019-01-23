@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	cachememdb "github.com/hashicorp/vault/command/agent/cache/cachememdb"
+	"github.com/hashicorp/vault/helper/contextutil"
 	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
@@ -25,6 +28,7 @@ type LeaseCache struct {
 	proxier Proxier
 	logger  hclog.Logger
 	db      *cachememdb.CacheMemDB
+	rand    *rand.Rand
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
@@ -45,6 +49,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		proxier: conf.Proxier,
 		logger:  conf.Logger,
 		db:      db,
+		rand:    rand.New(rand.NewSource(int64(time.Now().Nanosecond()))),
 	}
 
 	return lc, nil
@@ -153,15 +158,13 @@ func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBo
 		return
 	}
 
-	/*
-		// Start renewals after half the lease duration is exhausted
-		// TODO: Add jitter
-		leaseDuration := secret.LeaseDuration
-		if secret.Auth != nil {
-			leaseDuration = secret.Auth.LeaseDuration
-		}
-		contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(leaseDuration/2))
-	*/
+	// Start renewals when around half the lease duration is exhausted
+	leaseDuration := secret.LeaseDuration
+	if secret.Auth != nil {
+		leaseDuration = secret.Auth.LeaseDuration
+	}
+	// Add jitter and backoff until +-10% of half the lease duration
+	contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100))
 
 	// Fast path for shutdown
 	select {
@@ -199,6 +202,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBo
 					c.logger.Error("failed to renew secret", "error", err)
 					return
 				}
+				c.logger.Info("renewal completed; evicting from cache")
 				// TODO: Renewal process is complete. But this doesn't mean
 				// that the cache should evict the response right away. It
 				// should stay until its last bits of lease duration is

@@ -7,9 +7,8 @@ import (
 )
 
 type SendRequest struct {
-	CacheKey string
-	Token    string
-	Request  *http.Request
+	Token   string
+	Request *http.Request
 }
 
 type SendResponse struct {

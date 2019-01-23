@@ -56,7 +56,7 @@ func (indexName IndexName) String() string {
 	return ""
 }
 
-func indexName(indexName string) IndexName {
+func indexNameFromString(indexName string) IndexName {
 	switch indexName {
 	case "cache_key":
 		return IndexNameCacheKey

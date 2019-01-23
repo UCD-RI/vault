@@ -11,6 +11,7 @@ type CacheMemDB struct {
 	db *memdb.MemDB
 }
 
+// NewCacheMemDB creates a new instance of CacheMemDB.
 func NewCacheMemDB() (*CacheMemDB, error) {
 	db, err := newDB()
 	if err != nil {
@@ -69,19 +70,20 @@ func newDB() (*memdb.MemDB, error) {
 	return db, nil
 }
 
-func (c *CacheMemDB) Get(iName string, indexValue string) (*Index, error) {
-	in := indexName(iName)
+// Get returns the cached index based on the index name and value.
+func (c *CacheMemDB) Get(indexName string, indexValue string) (*Index, error) {
+	in := indexNameFromString(indexName)
 	if in == IndexNameInvalid {
-		return nil, fmt.Errorf("invalid index name %q", iName)
+		return nil, fmt.Errorf("invalid index name %q", indexName)
 	}
 	if in == IndexNameCacheKey {
-		iName = "id"
+		indexName = "id"
 	}
 
 	txn := c.db.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First("indexer", iName, indexValue)
+	raw, err := txn.First("indexer", indexName, indexValue)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +100,12 @@ func (c *CacheMemDB) Get(iName string, indexValue string) (*Index, error) {
 	return index, nil
 }
 
+// Set stores the index into the cache.
 func (c *CacheMemDB) Set(index *Index) error {
+	if index == nil {
+		return errors.New("nil index provided")
+	}
+
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
@@ -111,13 +118,9 @@ func (c *CacheMemDB) Set(index *Index) error {
 	return nil
 }
 
-func (c *CacheMemDB) Evict(iName string, indexValue string) error {
-	// If the iName is "cache_key", do the lookup as "id"
-	if indexName(iName) == IndexNameCacheKey {
-		iName = "id"
-	}
-
-	index, err := c.Get(iName, indexValue)
+// Evict removes an index from the cache based on index name and value.
+func (c *CacheMemDB) Evict(indexName string, indexValue string) error {
+	index, err := c.Get(indexName, indexValue)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
 	}
@@ -138,20 +141,30 @@ func (c *CacheMemDB) Evict(iName string, indexValue string) error {
 	return nil
 }
 
-func (c *CacheMemDB) EvictAll(iName, indexValue string) error {
-	return c.batchEvict(iName, indexValue)
+// EvictAll removes all matching indexes from the cache based on index name and value.
+func (c *CacheMemDB) EvictAll(indexName, indexValue string) error {
+	return c.batchEvict(indexName, indexValue, false)
 }
 
-func (c *CacheMemDB) EvictByPrefix(iName, indexPrefix string) error {
-	lookupPrefix := indexPrefix + "_prefix"
-	return c.batchEvict(iName, lookupPrefix)
+// EvictByPrefix removes all matching prefix indexes from the cache based on index name and prefix.
+func (c *CacheMemDB) EvictByPrefix(indexName, indexPrefix string) error {
+	return c.batchEvict(indexName, indexPrefix, true)
 }
 
-func (c *CacheMemDB) batchEvict(name, value string) error {
+func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) error {
+	// If the indexName is "cache_key", do the lookup as "id"
+	if indexNameFromString(indexName) == IndexNameCacheKey {
+		indexName = "id"
+	}
+
+	if isPrefix {
+		indexName = indexName + "_prefix"
+	}
+
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	_, err := txn.DeleteAll("indexer", name, value)
+	_, err := txn.DeleteAll("indexer", indexName, indexValue)
 	if err != nil {
 		return fmt.Errorf("unable to delete cache indexes: %v", err)
 	}
@@ -161,6 +174,7 @@ func (c *CacheMemDB) batchEvict(name, value string) error {
 	return nil
 }
 
+// Flush resets the underlying cache object.
 func (c *CacheMemDB) Flush() error {
 	newDB, err := newDB()
 	if err != nil {

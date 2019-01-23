@@ -23,10 +23,10 @@ type Index struct {
 	// TokenID is the token fetched the response held by this index
 	TokenID string
 
-	// Context is the context object for a goroutine that manages the renewal
+	// RenewCtx is the context object for a goroutine that manages the renewal
 	// of the secret that belongs to the response in this index. This context
 	// is used to stop the renewal process during cache invalidations.
-	Context context.Context
+	RenewCtx context.Context
 
 	// ID is the identifier for the index
 	ID string

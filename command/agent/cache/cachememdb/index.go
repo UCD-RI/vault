@@ -26,10 +26,7 @@ type Index struct {
 	// RenewCtx is the context object for a goroutine that manages the renewal
 	// of the secret that belongs to the response in this index. This context
 	// is used to stop the renewal process during cache invalidations.
-	RenewCtx context.Context
-
-	// ID is the identifier for the index
-	ID string
+	Context context.Context
 }
 
 type IndexName uint32
@@ -56,7 +53,7 @@ func (indexName IndexName) String() string {
 	return ""
 }
 
-func indexName(indexName string) IndexName {
+func indexNameFromString(indexName string) IndexName {
 	switch indexName {
 	case "cache_key":
 		return IndexNameCacheKey

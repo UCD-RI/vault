@@ -7,8 +7,6 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 )
 
-// CacheMemDB is an implementation of the `Cache` interface using the
-// hashicorp/go-memdb library.
 type CacheMemDB struct {
 	db *memdb.MemDB
 }

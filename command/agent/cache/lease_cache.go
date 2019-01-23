@@ -22,9 +22,9 @@ import (
 // the caching of responses. It passes the incoming request
 // to an underlying Proxier implementation.
 type LeaseCache struct {
-	underlying Proxier
-	logger     hclog.Logger
-	db         *cachememdb.CacheMemDB
+	proxier Proxier
+	logger  hclog.Logger
+	db      *cachememdb.CacheMemDB
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
@@ -42,17 +42,17 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 	}
 
 	lc := &LeaseCache{
-		underlying: conf.Proxier,
-		logger:     conf.Logger,
-		db:         db,
+		proxier: conf.Proxier,
+		logger:  conf.Logger,
+		db:      db,
 	}
 
 	return lc, nil
 }
 
 // Send performs a cache lookup on the incoming request. If it's a cache hit, it
-// will return the cached response, otherwise it will delegate to the underlygin
-// Proxier and cache the received response.
+// will return the cached response, otherwise it will delegate to the
+// underlying Proxier and cache the received response.
 func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	// Compute the CacheKey
 	cacheKey, err := computeCacheKey(req.Request)
@@ -60,10 +60,9 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 		c.logger.Error("unable to compute cache key", "error", err)
 		return nil, err
 	}
-	req.CacheKey = cacheKey
 
 	// Check if the response for this request is already in the cache
-	index, err := c.db.Get("cache_key", req.CacheKey)
+	index, err := c.db.Get("cache_key", cacheKey)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +86,7 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	}
 
 	// Pass the request down
-	resp, err := c.underlying.Send(req)
+	resp, err := c.proxier.Send(req)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +125,6 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
-		CacheKey:    req.CacheKey,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,
 		Response:    respBytes.Bytes(),
@@ -136,7 +134,7 @@ func (c *LeaseCache) Send(req *SendRequest) (*SendResponse, error) {
 	// renewal specific context and nothing else. The value probably won't
 	// be used at all.
 	reqCtx := req.Request.Context()
-	renewCtx := context.WithValue(reqCtx, "key", req.CacheKey)
+	renewCtx := context.WithValue(reqCtx, "key", cacheKey)
 	index.Context = renewCtx
 
 	// Cache the receive response

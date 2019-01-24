@@ -8,6 +8,15 @@ import (
 	"github.com/go-test/deep"
 )
 
+func testRenewCtxInfo() *RenewCtxInfo {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
+	return &RenewCtxInfo{
+		Ctx:        ctx,
+		CancelFunc: cancelFunc,
+	}
+}
+
 func TestNewCacheMemDB(t *testing.T) {
 	_, err := NewCacheMemDB()
 	if err != nil {
@@ -120,11 +129,11 @@ func TestCacheMemDB_Set(t *testing.T) {
 		{
 			"all_fields",
 			&Index{
-				ID:          "foo",
-				TokenID:     "bar",
-				LeaseID:     "baz",
-				RequestPath: "/v1/request/path",
-				RenewCtx:    context.Background(),
+				ID:           "foo",
+				TokenID:      "bar",
+				LeaseID:      "baz",
+				RequestPath:  "/v1/request/path",
+				RenewCtxInfo: testRenewCtxInfo(),
 			},
 			false,
 		},
@@ -151,11 +160,11 @@ func TestCacheMemDB_Evict(t *testing.T) {
 	}
 
 	testIndex := &Index{
-		ID:          "foo",
-		TokenID:     "bar",
-		LeaseID:     "baz",
-		RequestPath: "/v1/request/path",
-		RenewCtx:    context.Background(),
+		ID:           "foo",
+		TokenID:      "bar",
+		LeaseID:      "baz",
+		RequestPath:  "/v1/request/path",
+		RenewCtxInfo: testRenewCtxInfo(),
 	}
 
 	testCases := []struct {
@@ -237,35 +246,35 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 
 	testTokenIDIndexes := []*Index{
 		&Index{
-			ID:          "key1",
-			TokenID:     "bar",
-			LeaseID:     "lease1",
-			RequestPath: "/v1/request/path/1",
-			RenewCtx:    context.Background(),
+			ID:           "key1",
+			TokenID:      "bar",
+			LeaseID:      "lease1",
+			RequestPath:  "/v1/request/path/1",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 		&Index{
-			ID:          "key2",
-			TokenID:     "bar",
-			LeaseID:     "lease2",
-			RequestPath: "/v1/request/path/2",
-			RenewCtx:    context.Background(),
+			ID:           "key2",
+			TokenID:      "bar",
+			LeaseID:      "lease2",
+			RequestPath:  "/v1/request/path/2",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 	}
 
 	testReqPathIndexes := []*Index{
 		&Index{
-			ID:          "key1",
-			TokenID:     "token1",
-			LeaseID:     "lease1",
-			RequestPath: "/v1/request/path",
-			RenewCtx:    context.Background(),
+			ID:           "key1",
+			TokenID:      "token1",
+			LeaseID:      "lease1",
+			RequestPath:  "/v1/request/path",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 		&Index{
-			ID:          "key2",
-			TokenID:     "token2",
-			LeaseID:     "lease2",
-			RequestPath: "/v1/request/path",
-			RenewCtx:    context.Background(),
+			ID:           "key2",
+			TokenID:      "token2",
+			LeaseID:      "lease2",
+			RequestPath:  "/v1/request/path",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 	}
 
@@ -347,35 +356,35 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 
 	testLeaseIDIndexes := []*Index{
 		&Index{
-			ID:          "key1",
-			TokenID:     "token2",
-			LeaseID:     "baz/1",
-			RequestPath: "/v1/request/path",
-			RenewCtx:    context.Background(),
+			ID:           "key1",
+			TokenID:      "token2",
+			LeaseID:      "baz/1",
+			RequestPath:  "/v1/request/path",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 		&Index{
-			ID:          "key2",
-			TokenID:     "token2",
-			LeaseID:     "baz/2",
-			RequestPath: "/v1/request/path",
-			RenewCtx:    context.Background(),
+			ID:           "key2",
+			TokenID:      "token2",
+			LeaseID:      "baz/2",
+			RequestPath:  "/v1/request/path",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 	}
 
 	testReqPathIndexes := []*Index{
 		&Index{
-			ID:          "key1",
-			TokenID:     "token1",
-			LeaseID:     "lease1",
-			RequestPath: "/v1/request/path/1",
-			RenewCtx:    context.Background(),
+			ID:           "key1",
+			TokenID:      "token1",
+			LeaseID:      "lease1",
+			RequestPath:  "/v1/request/path/1",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 		&Index{
-			ID:          "key2",
-			TokenID:     "token2",
-			LeaseID:     "lease2",
-			RequestPath: "/v1/request/path/2",
-			RenewCtx:    context.Background(),
+			ID:           "key2",
+			TokenID:      "token2",
+			LeaseID:      "lease2",
+			RequestPath:  "/v1/request/path/2",
+			RenewCtxInfo: testRenewCtxInfo(),
 		},
 	}
 

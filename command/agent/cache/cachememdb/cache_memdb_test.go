@@ -28,7 +28,7 @@ func TestCacheMemDB_Get(t *testing.T) {
 	}
 
 	// Test on empty cache
-	index, err := cache.Get("cache_key", "foo")
+	index, err := cache.Get(IndexNameID.String(), "foo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestCacheMemDB_Get(t *testing.T) {
 
 	// Populate cache
 	in := &Index{
-		CacheKey:    "foo",
+		ID:          "foo",
 		TokenID:     "bar",
 		LeaseID:     "baz",
 		RequestPath: "/v1/request/path",
@@ -55,9 +55,9 @@ func TestCacheMemDB_Get(t *testing.T) {
 		iValue string
 	}{
 		{
-			"by_cache_key",
-			"cache_key",
-			in.CacheKey,
+			"by_index_id",
+			"id",
+			in.ID,
 		},
 		{
 			"by_lease_id",
@@ -120,7 +120,7 @@ func TestCacheMemDB_Set(t *testing.T) {
 		{
 			"all_fields",
 			&Index{
-				CacheKey:    "foo",
+				ID:          "foo",
 				TokenID:     "bar",
 				LeaseID:     "baz",
 				RequestPath: "/v1/request/path",
@@ -146,12 +146,12 @@ func TestCacheMemDB_Evict(t *testing.T) {
 	}
 
 	// Test on empty cache
-	if err := cache.Evict("cache_key", "foo"); err != nil {
+	if err := cache.Evict(IndexNameID.String(), "foo"); err != nil {
 		t.Fatal(err)
 	}
 
 	testIndex := &Index{
-		CacheKey:    "foo",
+		ID:          "foo",
 		TokenID:     "bar",
 		LeaseID:     "baz",
 		RequestPath: "/v1/request/path",
@@ -180,8 +180,8 @@ func TestCacheMemDB_Evict(t *testing.T) {
 			true,
 		},
 		{
-			"by_cache_key",
-			"cache_key",
+			"by_index_id",
+			"id",
 			"foo",
 			testIndex,
 			false,
@@ -195,7 +195,7 @@ func TestCacheMemDB_Evict(t *testing.T) {
 		},
 		{
 			"by_lease_id",
-			"cache_key",
+			"id",
 			"baz",
 			testIndex,
 			false,
@@ -231,20 +231,20 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 	}
 
 	// Test on empty cache
-	if err := cache.EvictAll("cache_key", "foo"); err != nil {
+	if err := cache.EvictAll(IndexNameID.String(), "foo"); err != nil {
 		t.Fatal(err)
 	}
 
 	testTokenIDIndexes := []*Index{
 		&Index{
-			CacheKey:    "key1",
+			ID:          "key1",
 			TokenID:     "bar",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path/1",
 			RenewCtx:    context.Background(),
 		},
 		&Index{
-			CacheKey:    "key2",
+			ID:          "key2",
 			TokenID:     "bar",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path/2",
@@ -254,14 +254,14 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 
 	testReqPathIndexes := []*Index{
 		&Index{
-			CacheKey:    "key1",
+			ID:          "key1",
 			TokenID:     "token1",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path",
 			RenewCtx:    context.Background(),
 		},
 		&Index{
-			CacheKey:    "key2",
+			ID:          "key2",
 			TokenID:     "token2",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path",
@@ -341,20 +341,20 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 	}
 
 	// Test on empty cache
-	if err := cache.EvictAll("cache_key", "foo"); err != nil {
+	if err := cache.EvictAll(IndexNameID.String(), "foo"); err != nil {
 		t.Fatal(err)
 	}
 
 	testLeaseIDIndexes := []*Index{
 		&Index{
-			CacheKey:    "key1",
+			ID:          "key1",
 			TokenID:     "token2",
 			LeaseID:     "baz/1",
 			RequestPath: "/v1/request/path",
 			RenewCtx:    context.Background(),
 		},
 		&Index{
-			CacheKey:    "key2",
+			ID:          "key2",
 			TokenID:     "token2",
 			LeaseID:     "baz/2",
 			RequestPath: "/v1/request/path",
@@ -364,14 +364,14 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 
 	testReqPathIndexes := []*Index{
 		&Index{
-			CacheKey:    "key1",
+			ID:          "key1",
 			TokenID:     "token1",
 			LeaseID:     "lease1",
 			RequestPath: "/v1/request/path/1",
 			RenewCtx:    context.Background(),
 		},
 		&Index{
-			CacheKey:    "key2",
+			ID:          "key2",
 			TokenID:     "token2",
 			LeaseID:     "lease2",
 			RequestPath: "/v1/request/path/2",
@@ -435,7 +435,7 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			// Check that indexes are no longer in the cache
 			foundIndexes := []*Index{}
 			for i := range tc.insertIndex {
-				out, err := cache.Get("cache_key", fmt.Sprintf("key%d", i+1))
+				out, err := cache.Get(IndexNameID.String(), fmt.Sprintf("key%d", i+1))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -458,7 +458,7 @@ func TestCacheMemDB_Flush(t *testing.T) {
 
 	// Populate cache
 	in := &Index{
-		CacheKey:    "foo",
+		ID:          "foo",
 		TokenID:     "bar",
 		LeaseID:     "baz",
 		RequestPath: "/v1/request/path",
@@ -475,7 +475,7 @@ func TestCacheMemDB_Flush(t *testing.T) {
 	}
 
 	// Check the cache doesn't contain inserted index
-	out, err := cache.Get("cache_key", "foo")
+	out, err := cache.Get(IndexNameID.String(), "foo")
 	if err != nil {
 		t.Fatal(err)
 	}

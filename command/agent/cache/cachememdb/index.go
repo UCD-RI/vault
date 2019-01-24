@@ -10,10 +10,10 @@ type RenewCtxInfo struct {
 // Index holds the response to be cached along with multiple other values that
 // serve as pointers to refer back to this index.
 type Index struct {
-	// CacheKey is a value that uniquely represents the request held by this
+	// ID is a value that uniquely represents the request held by this
 	// index. This is computed by serializing and hashing the response object.
 	// Required: true, Unique: true
-	CacheKey string
+	ID string
 
 	// TokenID is the token fetched the response held by this index
 	// Required: true, Unique: false
@@ -41,8 +41,8 @@ type Index struct {
 type IndexName uint32
 
 const (
-	IndexNameInvalid = iota
-	IndexNameCacheKey
+	IndexNameInvalid IndexName = iota
+	IndexNameID
 	IndexNameLeaseID
 	IndexNameRequestPath
 	IndexNameTokenID
@@ -50,8 +50,8 @@ const (
 
 func (indexName IndexName) String() string {
 	switch indexName {
-	case IndexNameCacheKey:
-		return "cache_key"
+	case IndexNameID:
+		return "id"
 	case IndexNameLeaseID:
 		return "lease_id"
 	case IndexNameRequestPath:
@@ -64,8 +64,8 @@ func (indexName IndexName) String() string {
 
 func indexNameFromString(indexName string) IndexName {
 	switch indexName {
-	case "cache_key":
-		return IndexNameCacheKey
+	case "id":
+		return IndexNameID
 	case "lease_id":
 		return IndexNameLeaseID
 	case "request_path":

@@ -59,22 +59,22 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // will return the cached response, otherwise it will delegate to the
 // underlying Proxier and cache the received response.
 func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
-	// Compute the CacheKey
-	cacheKey, err := computeCacheKey(req.Request)
+	// Compute the index ID
+	id, err := computeIndexID(req.Request)
 	if err != nil {
 		c.logger.Error("unable to compute cache key", "error", err)
 		return nil, err
 	}
 
 	// Check if the response for this request is already in the cache
-	index, err := c.db.Get("cache_key", cacheKey)
+	index, err := c.db.Get(cachememdb.IndexNameID.String(), id)
 	if err != nil {
 		return nil, err
 	}
 
 	// Cached request is found, deserialize the response and return early
 	if index != nil {
-		c.logger.Debug("cached index found, returning cached response")
+		c.logger.Debug("cached index found, returning cached response", "path", req.Request.RequestURI)
 
 		reader := bufio.NewReader(bytes.NewReader(index.Response))
 		resp, err := http.ReadResponse(reader, nil)
@@ -90,29 +90,32 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		}, nil
 	}
 
-	// Pass the request down
+	// Pass the request down and get a response
 	resp, err := c.proxier.Send(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	// Temporarily hold the response body since serializing the response
-	// via http.Response.Write() will close the body. We reset the body
-	// after this initial read also after the write call.
+	// Temporarily hold the response body since serializing the response via
+	// http.Response.Write() will close the body. Reset the response body
+	// afterwards.
 	respBody, err := ioutil.ReadAll(resp.Response.Body)
 	if err != nil {
 		c.logger.Error("unable to read the response body", "error", err)
 		return nil, err
 	}
+
+	// Reset the response body for http.Response.Write to work
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
 	// Check whether we should cache
 	cacheable, err := shouldCache(respBody)
 	if err != nil {
-		c.logger.Error("unable to parse response body to determine cacheable response", "error", err)
+		c.logger.Error("failed to determine if the response is cacheable", "error", err)
 		return nil, err
 	}
 
+	// Fast path for response that can't be cached
 	if !cacheable {
 		return resp, nil
 	}
@@ -125,13 +128,14 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
+	// Reset the response body again for upper layers to read
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
 	c.logger.Debug("response not found in the cache, caching response", "path", req.Request.RequestURI)
 
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
-		CacheKey:    cacheKey,
+		ID:          id,
 		TokenID:     req.Token,
 		RequestPath: req.Request.RequestURI,
 		Response:    respBytes.Bytes(),
@@ -140,7 +144,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// Start renewing the secret in the response
 	go c.startRenewing(ctx, index, req, respBody)
 
-	// Cache the receive response
+	// Store the index in the cache
 	err = c.db.Set(index)
 	if err != nil {
 		c.logger.Error("unable to cache the proxied response", "error", err)
@@ -152,7 +156,10 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithCancel(context.WithValue(ctx, struct{}{}, index.CacheKey))
+
+	// Add cache key to the context for the renewer goroutine to update the
+	// cache upon receiving a new renewal
+	ctx, cancel = context.WithCancel(context.WithValue(ctx, struct{}{}, index.ID))
 
 	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
 		Ctx:        ctx,
@@ -220,7 +227,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				// that the cache should evict the response right away. It
 				// should stay until its last bits of lease duration is
 				// exhausted.
-				err = c.db.Evict("cache_key", ctx.Value(struct{}{}).(string))
+				err = c.db.Evict(cachememdb.IndexNameID.String(), ctx.Value(struct{}{}).(string))
 				if err != nil {
 					c.logger.Error("failed to evict index", "error", err)
 				}
@@ -240,15 +247,15 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 
 func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutput) error {
 	// Get the cache key from the renewal context
-	cacheKey := ctx.Value(struct{}{}).(string)
+	id := ctx.Value(struct{}{}).(string)
 
 	// Get the cached index
-	index, err := c.db.Get("cache_key", cacheKey)
+	index, err := c.db.Get(cachememdb.IndexNameID.String(), id)
 	if err != nil {
 		return err
 	}
 	if index == nil {
-		return fmt.Errorf("missing cache entry for key: %q", cacheKey)
+		return fmt.Errorf("missing cache entry for key: %q", id)
 	}
 
 	// Read the response from the index
@@ -285,10 +292,10 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 	return nil
 }
 
-// computeCacheKey results in a value that uniquely identifies a request
+// computeIndexID results in a value that uniquely identifies a request
 // received by the agent. It does so by SHA256 hashing the marshalled JSON
 // which contains the request path, query parameters and body parameters.
-func computeCacheKey(req *http.Request) (string, error) {
+func computeIndexID(req *http.Request) (string, error) {
 	var b bytes.Buffer
 
 	// We need to hold on to the request body to plop it back in since

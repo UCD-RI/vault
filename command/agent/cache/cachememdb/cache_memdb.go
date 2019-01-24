@@ -37,7 +37,7 @@ func newDB() (*memdb.MemDB, error) {
 						Name:   "id",
 						Unique: true,
 						Indexer: &memdb.StringFieldIndex{
-							Field: "CacheKey",
+							Field: "ID",
 						},
 					},
 					"token_id": &memdb.IndexSchema{
@@ -79,9 +79,6 @@ func (c *CacheMemDB) Get(indexName string, indexValue string) (*Index, error) {
 	in := indexNameFromString(indexName)
 	if in == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", indexName)
-	}
-	if in == IndexNameCacheKey {
-		indexName = "id"
 	}
 
 	txn := c.db.Txn(false)
@@ -158,11 +155,6 @@ func (c *CacheMemDB) EvictByPrefix(indexName, indexPrefix string) error {
 }
 
 func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) error {
-	// If the indexName is "cache_key", do the lookup as "id"
-	if indexNameFromString(indexName) == IndexNameCacheKey {
-		indexName = "id"
-	}
-
 	if isPrefix {
 		indexName = indexName + "_prefix"
 	}

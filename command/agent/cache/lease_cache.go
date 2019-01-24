@@ -135,11 +135,17 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		TokenID:     req.Token,
 		RequestPath: req.Request.URL.Path,
 		Response:    respBytes.Bytes(),
-		RenewCtx:    context.WithValue(ctx, struct{}{}, cacheKey),
+	}
+
+	// Create a cancellable context for the renewer goroutine
+	renewCtx, renewCtxCancelFunc := context.WithCancel(context.WithValue(ctx, struct{}{}, cacheKey))
+	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
+		Ctx:        renewCtx,
+		CancelFunc: renewCtxCancelFunc,
 	}
 
 	// Start renewing the secret in the response
-	go c.startRenewing(index.RenewCtx, req, respBody)
+	go c.startRenewing(renewCtx, req, respBody)
 
 	// Cache the receive response
 	err = c.db.Set(index)

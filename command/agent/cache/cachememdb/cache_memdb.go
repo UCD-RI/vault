@@ -7,6 +7,10 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 )
 
+const (
+	tableNameIndexer = "indexer"
+)
+
 type CacheMemDB struct {
 	db *memdb.MemDB
 }
@@ -26,8 +30,8 @@ func NewCacheMemDB() (*CacheMemDB, error) {
 func newDB() (*memdb.MemDB, error) {
 	cacheSchema := &memdb.DBSchema{
 		Tables: map[string]*memdb.TableSchema{
-			"indexer": &memdb.TableSchema{
-				Name: "indexer",
+			tableNameIndexer: &memdb.TableSchema{
+				Name: tableNameIndexer,
 				Indexes: map[string]*memdb.IndexSchema{
 					"id": &memdb.IndexSchema{
 						Name:   "id",
@@ -83,7 +87,7 @@ func (c *CacheMemDB) Get(indexName string, indexValue string) (*Index, error) {
 	txn := c.db.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First("indexer", indexName, indexValue)
+	raw, err := txn.First(tableNameIndexer, indexName, indexValue)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +113,7 @@ func (c *CacheMemDB) Set(index *Index) error {
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	if err := txn.Insert("indexer", index); err != nil {
+	if err := txn.Insert(tableNameIndexer, index); err != nil {
 		return fmt.Errorf("unable to insert index into cache: %v", err)
 	}
 
@@ -132,9 +136,11 @@ func (c *CacheMemDB) Evict(indexName string, indexValue string) error {
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	if err := txn.Delete("indexer", index); err != nil {
+	if err := txn.Delete(tableNameIndexer, index); err != nil {
 		return fmt.Errorf("unable to delete index from cache: %v", err)
 	}
+
+	index.RenewCtxInfo.CancelFunc()
 
 	txn.Commit()
 
@@ -164,9 +170,30 @@ func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) err
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	_, err := txn.DeleteAll("indexer", indexName, indexValue)
+	iter, err := txn.Get(tableNameIndexer, indexName, indexValue)
 	if err != nil {
-		return fmt.Errorf("unable to delete cache indexes: %v", err)
+		return err
+	}
+
+	var objs []interface{}
+	for {
+		obj := iter.Next()
+		if obj == nil {
+			break
+		}
+
+		objs = append(objs, obj)
+	}
+
+	for _, obj := range objs {
+		if err := txn.Delete(tableNameIndexer, obj); err != nil {
+			return err
+		}
+		index, ok := obj.(*Index)
+		if !ok {
+			return errors.New("unable to parse index value from the cache")
+		}
+		index.RenewCtxInfo.CancelFunc()
 	}
 
 	txn.Commit()

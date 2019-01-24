@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,7 +63,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// Compute the index ID
 	id, err := computeIndexID(req.Request)
 	if err != nil {
-		c.logger.Error("unable to compute cache key", "error", err)
+		c.logger.Error("failed to compute cache key", "error", err)
 		return nil, err
 	}
 
@@ -79,7 +80,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		reader := bufio.NewReader(bytes.NewReader(index.Response))
 		resp, err := http.ReadResponse(reader, nil)
 		if err != nil {
-			c.logger.Error("unable to deserialize response", "error", err)
+			c.logger.Error("failed to deserialize response", "error", err)
 			return nil, err
 		}
 
@@ -101,7 +102,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// afterwards.
 	respBody, err := ioutil.ReadAll(resp.Response.Body)
 	if err != nil {
-		c.logger.Error("unable to read the response body", "error", err)
+		c.logger.Error("failed to read the response body", "error", err)
 		return nil, err
 	}
 
@@ -124,7 +125,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	var respBytes bytes.Buffer
 	err = resp.Response.Write(&respBytes)
 	if err != nil {
-		c.logger.Error("unable to serialize response", "error", err)
+		c.logger.Error("failed to serialize response", "error", err)
 		return nil, err
 	}
 
@@ -147,7 +148,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// Store the index in the cache
 	err = c.db.Set(index)
 	if err != nil {
-		c.logger.Error("unable to cache the proxied response", "error", err)
+		c.logger.Error("failed to cache the proxied response", "error", err)
 		return nil, err
 	}
 
@@ -157,10 +158,11 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
 	var cancel context.CancelFunc
 
-	// Add cache key to the context for the renewer goroutine to update the
-	// cache upon receiving a new renewal
+	// Store index ID into the context for the renewer goroutine to update the
+	// cache upon receiving renewed secrets
 	ctx, cancel = context.WithCancel(context.WithValue(ctx, struct{}{}, index.ID))
 
+	// Store the context information in the index
 	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
 		Ctx:        ctx,
 		CancelFunc: cancel,
@@ -172,15 +174,15 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		return
 	}
 
-	// Start renewing when around half the lease duration is exhausted
+	// Begin renewing when around half the lease duration is exhausted
 	leaseDuration := secret.LeaseDuration
 	if secret.Auth != nil {
 		leaseDuration = secret.Auth.LeaseDuration
 	}
+	// Add a jitter of +-10% to half time
 	backoffDuration := time.Second * time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100)
 
 	c.logger.Debug("initiating backoff", "path", req.Request.RequestURI, "duration", backoffDuration.String())
-	// Add jitter and backoff until +-10% of half the lease duration
 	contextutil.BackoffOrQuit(ctx, backoffDuration)
 
 	// Fast path for shutdown
@@ -192,10 +194,10 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	default:
 	}
 
-	renewFunc := func(ctx context.Context, secret *api.Secret) {
+	go func(ctx context.Context, secret *api.Secret) {
 		client, err := api.NewClient(api.DefaultConfig())
 		if err != nil {
-			c.logger.Error("failed to create API client", "error", err)
+			c.logger.Error("failed to create API client in the renewer", "error", err)
 			return
 		}
 		client.SetToken(req.Token)
@@ -225,11 +227,12 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.RequestURI)
 				// TODO: Renewal process is complete. But this doesn't mean
 				// that the cache should evict the response right away. It
-				// should stay until its last bits of lease duration is
+				// should stay until the last bits of lease duration is
 				// exhausted.
 				err = c.db.Evict(cachememdb.IndexNameID.String(), ctx.Value(struct{}{}).(string))
 				if err != nil {
 					c.logger.Error("failed to evict index", "error", err)
+					return
 				}
 				return
 			case renewal := <-renewer.RenewCh():
@@ -241,27 +244,25 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				}
 			}
 		}
-	}
-	go renewFunc(ctx, secret)
+	}(ctx, secret)
 }
 
 func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutput) error {
-	// Get the cache key from the renewal context
 	id := ctx.Value(struct{}{}).(string)
 
-	// Get the cached index
+	// Get the cached index using the id in the context
 	index, err := c.db.Get(cachememdb.IndexNameID.String(), id)
 	if err != nil {
 		return err
 	}
 	if index == nil {
-		return fmt.Errorf("missing cache entry for key: %q", id)
+		return fmt.Errorf("missing cache entry for id: %q", id)
 	}
 
 	// Read the response from the index
 	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(index.Response)), nil)
 	if err != nil {
-		c.logger.Error("unable to deserialize response", "error", err)
+		c.logger.Error("failed to deserialize response", "error", err)
 		return err
 	}
 
@@ -277,7 +278,7 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 	var respBytes bytes.Buffer
 	err = resp.Write(&respBytes)
 	if err != nil {
-		c.logger.Error("unable to serialize updated response", "error", err)
+		c.logger.Error("failed to serialize updated response", "error", err)
 		return err
 	}
 
@@ -285,7 +286,7 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 	index.Response = respBytes.Bytes()
 	err = c.db.Set(index)
 	if err != nil {
-		c.logger.Error("unable to cache the proxied response", "error", err)
+		c.logger.Error("failed to cache the proxied response", "error", err)
 		return err
 	}
 
@@ -302,20 +303,20 @@ func computeIndexID(req *http.Request) (string, error) {
 	// http.Request.Write will close the reader.
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
-		return "", fmt.Errorf("unable to read request body: %v", err)
+		return "", fmt.Errorf("failed to read request body: %v", err)
 	}
 	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
 	// Serialze the request
 	if err := req.Write(&b); err != nil {
-		return "", fmt.Errorf("unable to serialize request: %v", err)
+		return "", fmt.Errorf("failed to serialize request: %v", err)
 	}
 
 	// Reset the request body
 	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
 	sum := sha256.Sum256(b.Bytes())
-	return string(sum[:]), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // HandleClear is returns a handlerFunc that can perform cache clearing operations
@@ -339,24 +340,24 @@ func (c *LeaseCache) HandleClear() http.Handler {
 		case "request_path":
 			err = c.db.EvictByPrefix(req.Type, req.Value)
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict indexes from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict indexes from cache: {{err}}", err))
 				return
 			}
 		case "token_id":
 			err = c.db.EvictAll(req.Type, req.Value)
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict index from cache: {{err}}", err))
 				return
 			}
 		case "lease_id":
 			err = c.db.Evict(req.Type, req.Value)
 			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unable to evict index from cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict index from cache: {{err}}", err))
 				return
 			}
 		case "all":
 			if err := c.db.Flush(); err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("unabled to reset the cache: {{err}}", err))
+				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to reset the cache: {{err}}", err))
 				return
 			}
 		default:

@@ -74,7 +74,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	// Cached request is found, deserialize the response and return early
 	if index != nil {
-		c.logger.Info("cached index found, returning cached response")
+		c.logger.Debug("cached index found, returning cached response")
 
 		reader := bufio.NewReader(bytes.NewReader(index.Response))
 		resp, err := http.ReadResponse(reader, nil)
@@ -127,25 +127,18 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
-	c.logger.Info("response not found in the cache, caching response")
+	c.logger.Debug("response not found in the cache, caching response", "path", req.Request.RequestURI)
 
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
 		CacheKey:    cacheKey,
 		TokenID:     req.Token,
-		RequestPath: req.Request.URL.Path,
+		RequestPath: req.Request.RequestURI,
 		Response:    respBytes.Bytes(),
 	}
 
-	// Create a cancellable context for the renewer goroutine
-	renewCtx, renewCtxCancelFunc := context.WithCancel(context.WithValue(ctx, struct{}{}, cacheKey))
-	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
-		Ctx:        renewCtx,
-		CancelFunc: renewCtxCancelFunc,
-	}
-
 	// Start renewing the secret in the response
-	go c.startRenewing(renewCtx, req, respBody)
+	go c.startRenewing(ctx, index, req, respBody)
 
 	// Cache the receive response
 	err = c.db.Set(index)
@@ -157,25 +150,37 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	return resp, nil
 }
 
-func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBody []byte) {
+func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithCancel(context.WithValue(ctx, struct{}{}, index.CacheKey))
+
+	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
+		Ctx:        ctx,
+		CancelFunc: cancel,
+	}
+
 	secret, err := api.ParseSecret(bytes.NewBuffer(respBody))
 	if err != nil {
 		c.logger.Error("failed to parse secret from response body", "error", err)
 		return
 	}
 
-	// Start renewals when around half the lease duration is exhausted
+	// Start renewing when around half the lease duration is exhausted
 	leaseDuration := secret.LeaseDuration
 	if secret.Auth != nil {
 		leaseDuration = secret.Auth.LeaseDuration
 	}
+	backoffDuration := time.Second * time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100)
+
+	c.logger.Debug("initiating backoff", "path", req.Request.RequestURI, "duration", backoffDuration.String())
 	// Add jitter and backoff until +-10% of half the lease duration
-	contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100))
+	contextutil.BackoffOrQuit(ctx, backoffDuration)
 
 	// Fast path for shutdown
 	select {
 	case <-ctx.Done():
-		c.logger.Info("shutdown triggered, not starting the renewer")
+		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.RequestURI)
+		cancel()
 		return
 	default:
 	}
@@ -195,20 +200,22 @@ func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBo
 			c.logger.Error("failed to create secret renewer", "error", err)
 			return
 		}
+
+		c.logger.Debug("initiating renewal", "path", req.Request.RequestURI)
 		go renewer.Renew()
 		defer renewer.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
-				c.logger.Info("shutdown triggered, stopping renewer")
+				c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.RequestURI)
 				return
 			case err := <-renewer.DoneCh():
 				if err != nil {
 					c.logger.Error("failed to renew secret", "error", err)
 					return
 				}
-				c.logger.Info("renewal completed; evicting from cache")
+				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.RequestURI)
 				// TODO: Renewal process is complete. But this doesn't mean
 				// that the cache should evict the response right away. It
 				// should stay until its last bits of lease duration is
@@ -219,7 +226,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, req *SendRequest, respBo
 				}
 				return
 			case renewal := <-renewer.RenewCh():
-				c.logger.Info("renewal received; updating cache")
+				c.logger.Debug("renewal received; updating cache", "path", req.Request.RequestURI)
 				err = c.updateResponse(ctx, renewal)
 				if err != nil {
 					c.logger.Error("failed to handle renewal", "error", err)

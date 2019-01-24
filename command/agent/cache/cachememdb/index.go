@@ -2,6 +2,11 @@ package cachememdb
 
 import "context"
 
+type RenewCtxInfo struct {
+	Ctx        context.Context
+	CancelFunc context.CancelFunc
+}
+
 // Index holds the response to be cached along with multiple other values that
 // serve as pointers to refer back to this index.
 type Index struct {
@@ -27,10 +32,10 @@ type Index struct {
 	// Response is the serialized response object that the agent is caching.
 	Response []byte
 
-	// RenewCtx is the context object for a goroutine that manages the renewal
-	// of the secret that belongs to the response in this index. This context
-	// is used to stop the renewal process during cache invalidations.
-	RenewCtx context.Context
+	// RenewCtxInfo holds the context and the corresponding cancel func for the
+	// goroutine that manages the renewal of the secret belonging to the
+	// response in this index.
+	RenewCtxInfo *RenewCtxInfo
 }
 
 type IndexName uint32

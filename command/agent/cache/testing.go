@@ -6,7 +6,9 @@ import (
 )
 
 // mockProxier is a mock implementation of the Proxier interface, used for testing purposes.
-// The mock will return the provided
+// The mock will return the provided responses every time it reaches its Send method, up to
+// the last provided response. This lets tests control what the next/underlying Proxier layer
+// might expect to return.
 type mockProxier struct {
 	proxiedResponses []*SendResponse
 	responseIndex    int

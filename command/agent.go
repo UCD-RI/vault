@@ -371,7 +371,7 @@ func (c *AgentCommand) Run(args []string) int {
 			return 1
 		}
 		// Add a path handler specific for the lease cache
-		mux.Handle("/v1/agent/cache-clear", lc.HandleClear())
+		mux.Handle("/v1/agent/cache-clear", lc.HandleCacheClear())
 		proxy = lc
 	}
 

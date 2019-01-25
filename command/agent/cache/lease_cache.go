@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -41,6 +42,14 @@ type LeaseCacheConfig struct {
 
 // NewLeaseCache creates a new instance of a LeaseCache.
 func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
+	if conf == nil {
+		return nil, errors.New("nil configuration provided")
+	}
+
+	if conf.Proxier == nil || conf.Logger == nil {
+		return nil, fmt.Errorf("missing configuration required params: %v", conf)
+	}
+
 	db, err := cachememdb.NewCacheMemDB()
 	if err != nil {
 		return nil, err
@@ -61,7 +70,8 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // underlying Proxier and cache the received response.
 func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	// Compute the index ID
-	id, err := computeIndexID(req.Request)
+	// TODO: Determine whether it's better to pass in a cloned object instead of modifying the incoming one.
+	id, err := computeIndexID(req)
 	if err != nil {
 		c.logger.Error("failed to compute cache key", "error", err)
 		return nil, err
@@ -296,31 +306,35 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 // computeIndexID results in a value that uniquely identifies a request
 // received by the agent. It does so by SHA256 hashing the marshalled JSON
 // which contains the request path, query parameters and body parameters.
-func computeIndexID(req *http.Request) (string, error) {
+func computeIndexID(req *SendRequest) (string, error) {
 	var b bytes.Buffer
 
 	// We need to hold on to the request body to plop it back in since
 	// http.Request.Write will close the reader.
-	body, err := ioutil.ReadAll(req.Body)
+	body, err := ioutil.ReadAll(req.Request.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read request body: %v", err)
 	}
-	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
 	// Serialze the request
-	if err := req.Write(&b); err != nil {
+	if err := req.Request.Write(&b); err != nil {
 		return "", fmt.Errorf("failed to serialize request: %v", err)
 	}
 
 	// Reset the request body
-	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+
+	// Append req.Token into the byte slice. This is needed since auto-auth'ed
+	// requests sets the token directly into SendRequest.Token
+	b.Write([]byte(req.Token))
 
 	sum := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// HandleClear is returns a handlerFunc that can perform cache clearing operations
-func (c *LeaseCache) HandleClear() http.Handler {
+// HandleCacheClear is returns a handlerFunc that can perform cache clearing operations
+func (c *LeaseCache) HandleCacheClear() http.Handler {
 	type request struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`

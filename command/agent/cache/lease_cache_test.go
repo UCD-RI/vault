@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -152,5 +153,79 @@ func TestLeaseCache_Send_nonCacheable(t *testing.T) {
 	}
 	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
 		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+}
+
+func TestLeaseCache_HandleCacheClear(t *testing.T) {
+	lc := testNewLeaseCache(t, nil)
+
+	handler := lc.HandleCacheClear()
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Test missing body, should return 400
+	resp, err := http.Post(ts.URL, "application/json", nil)
+	if err != nil {
+		t.Fatal()
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code mismatch: expected = %v, got = %v", http.StatusBadRequest, resp.StatusCode)
+	}
+
+	testCases := []struct {
+		name               string
+		reqType            string
+		reqValue           string
+		expectedStatusCode int
+	}{
+		{
+			"invalid_type",
+			"foo",
+			"",
+			http.StatusBadRequest,
+		},
+		{
+			"invalid_value",
+			"",
+			"bar",
+			http.StatusBadRequest,
+		},
+		{
+			"all",
+			"all",
+			"",
+			http.StatusOK,
+		},
+		{
+			"by_request_path",
+			"token_id",
+			"foo",
+			http.StatusOK,
+		},
+		{
+			"by_token_id",
+			"token_id",
+			"foo",
+			http.StatusOK,
+		},
+		{
+			"by_lease_id",
+			"lease_id",
+			"foo",
+			http.StatusOK,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reqBody := fmt.Sprintf("{\"type\": \"%s\", \"value\": \"%s\"}", tc.reqType, tc.reqValue)
+			resp, err := http.Post(ts.URL, "application/json", strings.NewReader(reqBody))
+			if err != nil {
+				t.Fatal()
+			}
+			if tc.expectedStatusCode != resp.StatusCode {
+				t.Fatalf("status code mismatch: expected = %v, got = %v", http.StatusOK, resp.StatusCode)
+			}
+		})
 	}
 }

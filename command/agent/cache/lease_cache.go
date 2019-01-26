@@ -346,7 +346,7 @@ func (c *LeaseCache) HandleCacheClear() http.Handler {
 
 		err := jsonutil.DecodeJSONFromReader(r.Body, req)
 		if err != nil && err != io.EOF {
-			w.WriteHeader(400)
+			respondError(w, http.StatusBadRequest, errors.New("unable to parse request body"))
 			return
 		}
 

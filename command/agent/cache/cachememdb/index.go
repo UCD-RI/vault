@@ -2,7 +2,7 @@ package cachememdb
 
 import "context"
 
-type RenewCtxInfo struct {
+type ContextInfo struct {
 	Ctx        context.Context
 	CancelFunc context.CancelFunc
 }
@@ -35,7 +35,7 @@ type Index struct {
 	// RenewCtxInfo holds the context and the corresponding cancel func for the
 	// goroutine that manages the renewal of the secret belonging to the
 	// response in this index.
-	RenewCtxInfo *RenewCtxInfo
+	RenewCtxInfo *ContextInfo
 }
 
 type IndexName uint32

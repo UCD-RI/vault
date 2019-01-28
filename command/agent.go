@@ -50,9 +50,6 @@ type AgentCommand struct {
 
 	cleanupGuard sync.Once
 
-	// Toggles whether lease cache layer should be disabled
-	leaseCacheDisabled bool
-
 	startedCh chan (struct{}) // for tests
 
 	flagConfigs  []string
@@ -354,38 +351,43 @@ func (c *AgentCommand) Run(args []string) int {
 	}
 
 	// Create the API proxier
-	proxy := cache.NewAPIProxy(&cache.APIProxyConfig{
+	apiProxy := cache.NewAPIProxy(&cache.APIProxyConfig{
 		Logger: c.logger.Named("cache.apiproxy"),
 	})
 
-	mux := http.NewServeMux()
-	if !c.leaseCacheDisabled {
-		// Create the lease cache proxier and set its underlying proxier to
-		// the API proxier.
-		lc, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-			Proxier: proxy,
-			Logger:  c.logger.Named("cache.leasecache"),
-		})
-		if err != nil {
-			c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
-			return 1
-		}
-		// Add a path handler specific for the lease cache
-		mux.Handle("/v1/agent/cache-clear", lc.HandleCacheClear())
-		proxy = lc
+	// Create a base context for the lease cache layer
+	baseCtx, baseCancelFunc := context.WithCancel(ctx)
+
+	// Create the lease cache proxier and set its underlying proxier to
+	// the API proxier.
+	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
+		BaseCtxInfo: &cache.ContextInfo{
+			Ctx:        baseCtx,
+			CancelFunc: baseCancelFunc,
+		},
+		Proxier: apiProxy,
+		Logger:  c.logger.Named("cache.leasecache"),
+	})
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
+		return 1
 	}
+
+	// Create a muxer and add paths relevant for the lease cache layer
+	mux := http.NewServeMux()
+	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleRequest(ctx))
 
 	// Start listening to requests
 	cache.Run(ctx, &cache.Config{
 		Token:            c.client.Token(),
-		Proxier:          proxy,
+		Proxier:          leaseCache,
 		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
 		Listeners:        listeners,
 		Handler:          mux,
 		Logger:           c.logger.Named("cache.handler"),
 	})
 
-	// Ensure that listeners are closed in all the exits
+	// Ensure that listeners are closed at all the exits
 	listenerCloseFunc := func() {
 		for _, ln := range listeners {
 			ln.Close()

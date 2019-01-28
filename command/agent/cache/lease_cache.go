@@ -23,21 +23,49 @@ import (
 	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
+type contextIndex struct{}
+
+var (
+	contextIndexID = contextIndex{}
+)
+
+type responseType int32
+
+const (
+	responseTypeNonCacheable responseType = iota
+	responseTypeLease
+	responseTypeToken
+)
+
+type ContextInfo struct {
+	Ctx        context.Context
+	CancelFunc context.CancelFunc
+}
+
+type cacheClearRequest struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 // LeaseCache is an implementation of Proxier that handles
 // the caching of responses. It passes the incoming request
 // to an underlying Proxier implementation.
 type LeaseCache struct {
-	proxier Proxier
-	logger  hclog.Logger
-	db      *cachememdb.CacheMemDB
-	rand    *rand.Rand
+	proxier       Proxier
+	logger        hclog.Logger
+	db            *cachememdb.CacheMemDB
+	rand          *rand.Rand
+	tokenContexts map[string]*ContextInfo
+	baseCtxInfo   *ContextInfo
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
 // Lease
 type LeaseCacheConfig struct {
-	Proxier Proxier
-	Logger  hclog.Logger
+	BaseCtxInfo *ContextInfo
+	BaseContext context.Context
+	Proxier     Proxier
+	Logger      hclog.Logger
 }
 
 // NewLeaseCache creates a new instance of a LeaseCache.
@@ -50,23 +78,23 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		return nil, fmt.Errorf("missing configuration required params: %v", conf)
 	}
 
-	db, err := cachememdb.NewCacheMemDB()
+	db, err := cachememdb.NewCacheMemDB(conf.Logger)
 	if err != nil {
 		return nil, err
 	}
 
-	lc := &LeaseCache{
-		proxier: conf.Proxier,
-		logger:  conf.Logger,
-		db:      db,
-		rand:    rand.New(rand.NewSource(int64(time.Now().Nanosecond()))),
-	}
-
-	return lc, nil
+	return &LeaseCache{
+		proxier:       conf.Proxier,
+		logger:        conf.Logger,
+		db:            db,
+		rand:          rand.New(rand.NewSource(int64(time.Now().Nanosecond()))),
+		tokenContexts: make(map[string]*ContextInfo),
+		baseCtxInfo:   conf.BaseCtxInfo,
+	}, nil
 }
 
-// Send performs a cache lookup on the incoming request. If it's a cache hit, it
-// will return the cached response, otherwise it will delegate to the
+// Send performs a cache lookup on the incoming request. If it's a cache hit,
+// it will return the cached response, otherwise it will delegate to the
 // underlying Proxier and cache the received response.
 func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	// Compute the index ID
@@ -119,15 +147,15 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// Reset the response body for http.Response.Write to work
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
-	// Check whether we should cache
-	cacheable, err := shouldCache(respBody)
+	// Determine the type of the response
+	rType, err := respType(respBody)
 	if err != nil {
-		c.logger.Error("failed to determine if the response is cacheable", "error", err)
+		c.logger.Error("failed to determine the response response type", "error", err)
 		return nil, err
 	}
 
-	// Fast path for response that can't be cached
-	if !cacheable {
+	// Fast-path for non-cacheable response
+	if rType == responseTypeNonCacheable {
 		return resp, nil
 	}
 
@@ -152,8 +180,28 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		Response:    respBytes.Bytes(),
 	}
 
+	// Get the context for the token
+	renewCtxInfo := c.ctxInfo(req.Token)
+
+	// If the secret is of type lease, derive a context for its renewal
+	if rType == responseTypeLease {
+		newCtxInfo := new(ContextInfo)
+		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
+		renewCtxInfo = newCtxInfo
+	}
+
+	// Store the cache index ID in the context for the renewer to operate on
+	// the cached index
+	renewCtx := context.WithValue(renewCtxInfo.Ctx, contextIndexID, index.ID)
+
+	// Store the renewer context information in the index
+	index.RenewCtxInfo = &cachememdb.ContextInfo{
+		Ctx:        renewCtx,
+		CancelFunc: renewCtxInfo.CancelFunc,
+	}
+
 	// Start renewing the secret in the response
-	go c.startRenewing(ctx, index, req, respBody)
+	go c.startRenewing(renewCtx, index, req, respBody)
 
 	// Store the index in the cache
 	err = c.db.Set(index)
@@ -165,24 +213,34 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	return resp, nil
 }
 
-func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
-	var cancel context.CancelFunc
-
-	// Store index ID into the context for the renewer goroutine to update the
-	// cache upon receiving renewed secrets
-	ctx, cancel = context.WithCancel(context.WithValue(ctx, struct{}{}, index.ID))
-
-	// Store the context information in the index
-	index.RenewCtxInfo = &cachememdb.RenewCtxInfo{
-		Ctx:        ctx,
-		CancelFunc: cancel,
+func (c *LeaseCache) ctxInfo(token string) *ContextInfo {
+	ctxInfo, ok := c.tokenContexts[token]
+	if !ok {
+		ctxInfo = new(ContextInfo)
+		ctxInfo.Ctx, ctxInfo.CancelFunc = context.WithCancel(c.baseCtxInfo.Ctx)
+		c.tokenContexts[token] = ctxInfo
 	}
+	return ctxInfo
+}
 
+func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
 	secret, err := api.ParseSecret(bytes.NewBuffer(respBody))
 	if err != nil {
 		c.logger.Error("failed to parse secret from response body", "error", err)
 		return
 	}
+
+	defer func() {
+		// When the renewer is done managing the secret, ensure that the cache
+		// doesn't hold the secret anymore
+		id := ctx.Value(contextIndexID).(string)
+		c.logger.Debug("cleaning up cache entry", "id", id)
+		err = c.db.Evict(cachememdb.IndexNameID.String(), id)
+		if err != nil {
+			c.logger.Error("failed to cleanup index", "id", id, "error", err)
+			return
+		}
+	}()
 
 	// Begin renewing when around half the lease duration is exhausted
 	leaseDuration := secret.LeaseDuration
@@ -199,7 +257,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	select {
 	case <-ctx.Done():
 		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.RequestURI)
-		cancel()
 		return
 	default:
 	}
@@ -239,7 +296,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				// that the cache should evict the response right away. It
 				// should stay until the last bits of lease duration is
 				// exhausted.
-				err = c.db.Evict(cachememdb.IndexNameID.String(), ctx.Value(struct{}{}).(string))
+				err = c.db.Evict(cachememdb.IndexNameID.String(), ctx.Value(contextIndexID).(string))
 				if err != nil {
 					c.logger.Error("failed to evict index", "error", err)
 					return
@@ -258,7 +315,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 }
 
 func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutput) error {
-	id := ctx.Value(struct{}{}).(string)
+	id := ctx.Value(contextIndexID).(string)
 
 	// Get the cached index using the id in the context
 	index, err := c.db.Get(cachememdb.IndexNameID.String(), id)
@@ -304,8 +361,8 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 }
 
 // computeIndexID results in a value that uniquely identifies a request
-// received by the agent. It does so by SHA256 hashing the marshalled JSON
-// which contains the request path, query parameters and body parameters.
+// received by the agent. It does so by SHA256 hashing the serialized request
+// object containing the request path, query parameters and body parameters.
 func computeIndexID(req *SendRequest) (string, error) {
 	var b bytes.Buffer
 
@@ -333,76 +390,105 @@ func computeIndexID(req *SendRequest) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// HandleCacheClear is returns a handlerFunc that can perform cache clearing operations
-func (c *LeaseCache) HandleCacheClear() http.Handler {
-	type request struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
+// HandleRequest is returns a handlerFunc that can perform cache clearing operations
+func (c *LeaseCache) HandleRequest(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c.logger.Trace("processing cache-clear request")
-
-		req := new(request)
+		req := new(cacheClearRequest)
 
 		err := jsonutil.DecodeJSONFromReader(r.Body, req)
 		if err != nil && err != io.EOF {
-			respondError(w, http.StatusBadRequest, errors.New("unable to parse request body"))
+			respondError(w, http.StatusBadRequest, err)
 			return
 		}
 
-		switch req.Type {
-		case "request_path":
-			err = c.db.EvictByPrefix(req.Type, req.Value)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict indexes from cache: {{err}}", err))
-				return
-			}
-		case "token_id":
-			err = c.db.EvictAll(req.Type, req.Value)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict index from cache: {{err}}", err))
-				return
-			}
-		case "lease_id":
-			err = c.db.Evict(req.Type, req.Value)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to evict index from cache: {{err}}", err))
-				return
-			}
-		case "all":
-			if err := c.db.Flush(); err != nil {
-				respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to reset the cache: {{err}}", err))
-				return
-			}
-		default:
-			respondError(w, http.StatusBadRequest, fmt.Errorf("invalid type provided: %v", req.Type))
+		err = c.handleCacheClear(ctx, req)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to clear cache: {{err}}", err))
 			return
 		}
-		// We've successfully cleared the cache
+
 		return
 	})
 }
 
-// shouldCache determines whether a response should be cached.
-// It will return true under any of the following conditions:
-// 1. The lease_id value exists and is not an empty string
-// 2. The auth block esists and is not nil
-func shouldCache(body []byte) (bool, error) {
+func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearRequest) error {
+	c.logger.Debug("received cache-clear request", "type", req.Type)
+	switch req.Type {
+	case "request_path":
+		// Find all the cached entries which has the given request path and
+		// cancel the contexts of all the respective renewers
+		indexes, err := c.db.GetByPrefix(req.Type, req.Value)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			index.RenewCtxInfo.CancelFunc()
+		}
+	case "token_id":
+		if req.Value == "" {
+			return nil
+		}
+		// Get the context for the given token and cancel its context
+		tokenCtxInfo := c.ctxInfo(req.Value)
+		tokenCtxInfo.CancelFunc()
+
+		// Remove the cancelled context from the map
+		delete(c.tokenContexts, req.Value)
+	case "lease_id":
+		// Get the cached index for the given lease
+		index, err := c.db.Get(req.Type, req.Value)
+		if err != nil {
+			return err
+		}
+		if index == nil {
+			return nil
+		}
+		// Cancel its renewer context
+		index.RenewCtxInfo.CancelFunc()
+	case "all":
+		// Cancel the base context which triggers all the goroutines to
+		// stop and evict entries from cache.
+		c.baseCtxInfo.CancelFunc()
+
+		// Reset the base context
+		baseCtx, baseCancel := context.WithCancel(ctx)
+		c.baseCtxInfo = &ContextInfo{
+			Ctx:        baseCtx,
+			CancelFunc: baseCancel,
+		}
+
+		// Reset the memdb instance
+		if err := c.db.Flush(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("invalid type %q", req.Type)
+	}
+	return nil
+}
+
+// respType determines the if the response is of type lease, token or
+// non-cacheable.
+func respType(body []byte) (rType responseType, err error) {
+	rType = responseTypeNonCacheable
+
 	rawBody := map[string]interface{}{}
-	err := json.Unmarshal(body, &rawBody)
+	err = json.Unmarshal(body, &rawBody)
 	if err != nil {
-		return false, err
+		return
 	}
 
 	if rawVal, ok := rawBody["lease_id"]; ok {
 		if leaseID, ok := rawVal.(string); ok && leaseID != "" {
-			return true, nil
+			rType = responseTypeLease
+			return
 		}
 	}
 
 	if auth, ok := rawBody["auth"]; ok && auth != nil {
-		return true, nil
+		rType = responseTypeToken
+		return
 	}
 
-	return false, nil
+	return
 }

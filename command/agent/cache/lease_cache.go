@@ -78,7 +78,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		return nil, fmt.Errorf("missing configuration required params: %v", conf)
 	}
 
-	db, err := cachememdb.NewCacheMemDB(conf.Logger)
+	db, err := cachememdb.NewCacheMemDB()
 	if err != nil {
 		return nil, err
 	}

@@ -8,10 +8,10 @@ import (
 	"github.com/go-test/deep"
 )
 
-func testRenewCtxInfo() *RenewCtxInfo {
+func testContextInfo() *ContextInfo {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	return &RenewCtxInfo{
+	return &ContextInfo{
 		Ctx:        ctx,
 		CancelFunc: cancelFunc,
 	}
@@ -133,7 +133,7 @@ func TestCacheMemDB_Set(t *testing.T) {
 				TokenID:      "bar",
 				LeaseID:      "baz",
 				RequestPath:  "/v1/request/path",
-				RenewCtxInfo: testRenewCtxInfo(),
+				RenewCtxInfo: testContextInfo(),
 			},
 			false,
 		},
@@ -164,7 +164,7 @@ func TestCacheMemDB_Evict(t *testing.T) {
 		TokenID:      "bar",
 		LeaseID:      "baz",
 		RequestPath:  "/v1/request/path",
-		RenewCtxInfo: testRenewCtxInfo(),
+		RenewCtxInfo: testContextInfo(),
 	}
 
 	testCases := []struct {
@@ -250,14 +250,14 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 			TokenID:      "bar",
 			LeaseID:      "lease1",
 			RequestPath:  "/v1/request/path/1",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
 			ID:           "key2",
 			TokenID:      "bar",
 			LeaseID:      "lease2",
 			RequestPath:  "/v1/request/path/2",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 	}
 
@@ -267,14 +267,14 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 			TokenID:      "token1",
 			LeaseID:      "lease1",
 			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
 			ID:           "key2",
 			TokenID:      "token2",
 			LeaseID:      "lease2",
 			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 	}
 
@@ -360,14 +360,14 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			TokenID:      "token2",
 			LeaseID:      "baz/1",
 			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
 			ID:           "key2",
 			TokenID:      "token2",
 			LeaseID:      "baz/2",
 			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 	}
 
@@ -377,14 +377,14 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			TokenID:      "token1",
 			LeaseID:      "lease1",
 			RequestPath:  "/v1/request/path/1",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
 			ID:           "key2",
 			TokenID:      "token2",
 			LeaseID:      "lease2",
 			RequestPath:  "/v1/request/path/2",
-			RenewCtxInfo: testRenewCtxInfo(),
+			RenewCtxInfo: testContextInfo(),
 		},
 	}
 

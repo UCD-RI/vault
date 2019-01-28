@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	hclog "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 )
 
@@ -12,21 +11,20 @@ const (
 	tableNameIndexer = "indexer"
 )
 
+// CacheMemDB is the underlying cache database for storing indexes.
 type CacheMemDB struct {
-	db     *memdb.MemDB
-	logger hclog.Logger
+	db *memdb.MemDB
 }
 
 // NewCacheMemDB creates a new instance of CacheMemDB.
-func NewCacheMemDB(logger hclog.Logger) (*CacheMemDB, error) {
+func NewCacheMemDB() (*CacheMemDB, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err
 	}
 
 	return &CacheMemDB{
-		db:     db,
-		logger: logger,
+		db: db,
 	}, nil
 }
 
@@ -102,8 +100,6 @@ func (c *CacheMemDB) GetByPrefix(indexName, prefix string) ([]*Index, error) {
 			return nil, fmt.Errorf("failed to cast cached object")
 		}
 
-		c.logger.Debug("reading index by prefix", "id", index.ID, "path", index.RequestPath)
-
 		indexes = append(indexes, index)
 	}
 
@@ -133,8 +129,6 @@ func (c *CacheMemDB) Get(indexName, indexValue string) (*Index, error) {
 		return nil, errors.New("unable to parse index value from the cache")
 	}
 
-	c.logger.Debug("reading index", "id", index.ID, "path", index.RequestPath)
-
 	return index, nil
 }
 
@@ -146,8 +140,6 @@ func (c *CacheMemDB) Set(index *Index) error {
 
 	txn := c.db.Txn(true)
 	defer txn.Abort()
-
-	c.logger.Debug("setting index", "id", index.ID, "path", index.RequestPath)
 
 	if err := txn.Insert(tableNameIndexer, index); err != nil {
 		return fmt.Errorf("unable to insert index into cache: %v", err)
@@ -171,8 +163,6 @@ func (c *CacheMemDB) Evict(indexName, indexValue string) error {
 
 	txn := c.db.Txn(true)
 	defer txn.Abort()
-
-	c.logger.Debug("evicting index", "id", index.ID, "path", index.RequestPath)
 
 	if err := txn.Delete(tableNameIndexer, index); err != nil {
 		return fmt.Errorf("unable to delete index from cache: %v", err)
@@ -201,8 +191,6 @@ func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) err
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	c.logger.Debug("deleting indexes by prefix", "index_name", indexName, "value", indexValue)
-
 	_, err := txn.DeleteAll(tableNameIndexer, indexName, indexValue)
 	if err != nil {
 		return err
@@ -220,7 +208,6 @@ func (c *CacheMemDB) Flush() error {
 		return err
 	}
 
-	c.logger.Debug("flushing memdb")
 	c.db = newDB
 
 	return nil

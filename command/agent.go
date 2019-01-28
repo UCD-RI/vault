@@ -375,7 +375,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 	// Create a muxer and add paths relevant for the lease cache layer
 	mux := http.NewServeMux()
-	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleRequest(ctx))
+	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
 
 	// Start listening to requests
 	cache.Run(ctx, &cache.Config{

@@ -390,8 +390,8 @@ func computeIndexID(req *SendRequest) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// HandleRequest is returns a handlerFunc that can perform cache clearing operations
-func (c *LeaseCache) HandleRequest(ctx context.Context) http.Handler {
+// HandleCacheClear is returns a handlerFunc that can perform cache clearing operations
+func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		req := new(cacheClearRequest)
 

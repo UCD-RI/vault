@@ -165,7 +165,6 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	renewCtxInfo := c.ctxInfo(req.Token)
 	switch rType {
 	case responseTypeLease:
-		// Get the context for the token
 		newCtxInfo := new(ContextInfo)
 		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
 		renewCtxInfo = newCtxInfo
@@ -229,18 +228,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		return
 	}
 
-	defer func() {
-		// When the renewer is done managing the secret, ensure that the cache
-		// doesn't hold the secret anymore
-		id := ctx.Value(contextIndexID).(string)
-		c.logger.Debug("cleaning up cache entry", "id", id)
-		err = c.db.Evict(cachememdb.IndexNameID.String(), id)
-		if err != nil {
-			c.logger.Error("failed to cleanup index", "id", id, "error", err)
-			return
-		}
-	}()
-
 	// Begin renewing when around half the lease duration is exhausted
 	leaseDuration := secret.LeaseDuration
 	if secret.Auth != nil {
@@ -252,15 +239,28 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	c.logger.Debug("initiating backoff", "path", req.Request.RequestURI, "duration", backoffDuration.String())
 	contextutil.BackoffOrQuit(ctx, backoffDuration)
 
+	cleanupFunc := func() {
+		id := ctx.Value(contextIndexID).(string)
+		c.logger.Debug("evicting index from cache", "id", id)
+		err = c.db.Evict(cachememdb.IndexNameID.String(), id)
+		if err != nil {
+			c.logger.Error("failed to evict index", "id", id, "error", err)
+			return
+		}
+	}
+
 	// Fast path for shutdown
 	select {
 	case <-ctx.Done():
 		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.RequestURI)
+		cleanupFunc()
 		return
 	default:
 	}
 
 	go func(ctx context.Context, secret *api.Secret) {
+		defer cleanupFunc()
+
 		client, err := api.NewClient(api.DefaultConfig())
 		if err != nil {
 			c.logger.Error("failed to create API client in the renewer", "error", err)
@@ -280,6 +280,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		go renewer.Renew()
 		defer renewer.Stop()
 
+		var lastLeaseDuration int
 		for {
 			select {
 			case <-ctx.Done():
@@ -291,15 +292,10 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 					return
 				}
 				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.RequestURI)
-				// TODO: Renewal process is complete. But this doesn't mean
-				// that the cache should evict the response right away. It
-				// should stay until the last bits of lease duration is
-				// exhausted.
-				err = c.db.Evict(cachememdb.IndexNameID.String(), ctx.Value(contextIndexID).(string))
-				if err != nil {
-					c.logger.Error("failed to evict index", "error", err)
-					return
-				}
+
+				// Backoff from returning until the last bits of the lease
+				// duration is consumed
+				contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(lastLeaseDuration))
 				return
 			case renewal := <-renewer.RenewCh():
 				c.logger.Debug("renewal received; updating cache", "path", req.Request.RequestURI)
@@ -307,6 +303,10 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				if err != nil {
 					c.logger.Error("failed to handle renewal", "error", err)
 					return
+				}
+				lastLeaseDuration = renewal.Secret.LeaseDuration
+				if renewal.Secret.Auth != nil {
+					lastLeaseDuration = renewal.Secret.Auth.LeaseDuration
 				}
 			}
 		}

@@ -113,7 +113,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	// Cached request is found, deserialize the response and return early
 	if index != nil {
-		c.logger.Debug("cached index found, returning cached response", "path", req.Request.RequestURI)
+		c.logger.Debug("returning cached response", "path", req.Request.RequestURI)
 
 		reader := bufio.NewReader(bytes.NewReader(index.Response))
 		resp, err := http.ReadResponse(reader, nil)
@@ -129,10 +129,18 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		}, nil
 	}
 
+	c.logger.Debug("forwarding the request and caching the response", "path", req.Request.RequestURI)
+
 	// Pass the request down and get a response
 	resp, err := c.proxier.Send(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+
+	// Build the index to cache based on the response received
+	index = &cachememdb.Index{
+		ID:          id,
+		RequestPath: req.Request.RequestURI,
 	}
 
 	// Temporarily hold the response body since serializing the response via
@@ -154,49 +162,38 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
-	// Fast-path for non-cacheable response
-	if rType == responseTypeNonCacheable {
+	renewCtxInfo := c.ctxInfo(req.Token)
+	switch rType {
+	case responseTypeLease:
+		// Get the context for the token
+		newCtxInfo := new(ContextInfo)
+		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
+		renewCtxInfo = newCtxInfo
+
+		index.Lease = rValue
+		index.Token = req.Token
+	case responseTypeToken:
+		index.Token = rValue
+		renewCtxInfo = c.ctxInfo(index.Token)
+	case responseTypeNonCacheable:
 		return resp, nil
 	}
 
-	// Serialize the response to store into the cache
+	// Serialize the response to store it in the cached index
 	var respBytes bytes.Buffer
 	err = resp.Response.Write(&respBytes)
 	if err != nil {
 		c.logger.Error("failed to serialize response", "error", err)
 		return nil, err
 	}
-
 	// Reset the response body again for upper layers to read
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
+	index.Response = respBytes.Bytes()
 
-	c.logger.Debug("response not found in the cache, caching response", "path", req.Request.RequestURI)
-
-	// Build the index to cache based on the response received
-	index = &cachememdb.Index{
-		ID:          id,
-		Token:       req.Token,
-		RequestPath: req.Request.RequestURI,
-		Response:    respBytes.Bytes(),
-	}
-
-	// Get the context for the token
-	renewCtxInfo := c.ctxInfo(req.Token)
-
-	// If the secret is of type lease, derive a context for its renewal
-	if rType == responseTypeLease {
-		newCtxInfo := new(ContextInfo)
-		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
-		renewCtxInfo = newCtxInfo
-		// Populate the lease value in the index
-		index.Lease = rValue
-	}
-
-	// Store the cache index ID in the context for the renewer to operate on
-	// the cached index
+	// Store the index ID in the renewer context
 	renewCtx := context.WithValue(renewCtxInfo.Ctx, contextIndexID, index.ID)
 
-	// Store the renewer context information in the index
+	// Store the renewer context in the index
 	index.RenewCtxInfo = &cachememdb.ContextInfo{
 		Ctx:        renewCtx,
 		CancelFunc: renewCtxInfo.CancelFunc,

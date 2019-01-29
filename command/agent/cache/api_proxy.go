@@ -39,7 +39,7 @@ func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, 
 
 	// Make the request to Vault and get the response
 	ap.logger.Info("forwarding request", "path", req.Request.RequestURI)
-	resp, err := client.RawRequestWithContext(context.Background(), fwReq)
+	resp, err := client.RawRequestWithContext(ctx, fwReq)
 	if err != nil {
 		return nil, err
 	}

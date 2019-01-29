@@ -148,7 +148,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 
 	// Determine the type of the response
-	rType, err := respType(respBody)
+	rType, rValue, err := respType(respBody)
 	if err != nil {
 		c.logger.Error("failed to determine the response response type", "error", err)
 		return nil, err
@@ -188,6 +188,8 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		newCtxInfo := new(ContextInfo)
 		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
 		renewCtxInfo = newCtxInfo
+		// Populate the lease value in the index
+		index.Lease = rValue
 	}
 
 	// Store the cache index ID in the context for the renewer to operate on
@@ -469,26 +471,23 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 
 // respType determines the if the response is of type lease, token or
 // non-cacheable.
-func respType(body []byte) (rType responseType, err error) {
-	rType = responseTypeNonCacheable
-
+func respType(body []byte) (responseType, string, error) {
 	rawBody := map[string]interface{}{}
-	err = json.Unmarshal(body, &rawBody)
+	err := json.Unmarshal(body, &rawBody)
 	if err != nil {
-		return
+		return responseTypeNonCacheable, "", err
 	}
 
 	if rawVal, ok := rawBody["lease_id"]; ok {
 		if leaseID, ok := rawVal.(string); ok && leaseID != "" {
-			rType = responseTypeLease
-			return
+			return responseTypeLease, leaseID, nil
 		}
 	}
 
 	if auth, ok := rawBody["auth"]; ok && auth != nil {
-		rType = responseTypeToken
-		return
+		token := auth.(map[string]interface{})["client_token"].(string)
+		return responseTypeToken, token, nil
 	}
 
-	return
+	return responseTypeNonCacheable, "", nil
 }

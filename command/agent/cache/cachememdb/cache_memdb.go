@@ -16,8 +16,8 @@ type CacheMemDB struct {
 	db *memdb.MemDB
 }
 
-// NewCacheMemDB creates a new instance of CacheMemDB.
-func NewCacheMemDB() (*CacheMemDB, error) {
+// New creates a new instance of CacheMemDB.
+func New() (*CacheMemDB, error) {
 	db, err := newDB()
 	if err != nil {
 		return nil, err

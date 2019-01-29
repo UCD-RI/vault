@@ -34,29 +34,36 @@ func newDB() (*memdb.MemDB, error) {
 			tableNameIndexer: &memdb.TableSchema{
 				Name: tableNameIndexer,
 				Indexes: map[string]*memdb.IndexSchema{
-					"id": &memdb.IndexSchema{
-						Name:   "id",
+					IndexNameID.String(): &memdb.IndexSchema{
+						Name:   IndexNameID.String(),
 						Unique: true,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "ID",
 						},
 					},
-					"token": &memdb.IndexSchema{
-						Name:   "token",
+					IndexNameToken.String(): &memdb.IndexSchema{
+						Name:   IndexNameToken.String(),
 						Unique: false,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "Token",
 						},
 					},
-					"request_path": &memdb.IndexSchema{
-						Name:   "request_path",
+					IndexNameTokenAccessor.String(): &memdb.IndexSchema{
+						Name:   IndexNameTokenAccessor.String(),
+						Unique: false,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "TokenAccessor",
+						},
+					},
+					IndexNameRequestPath.String(): &memdb.IndexSchema{
+						Name:   IndexNameRequestPath.String(),
 						Unique: false,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "RequestPath",
 						},
 					},
-					"lease": &memdb.IndexSchema{
-						Name:         "lease",
+					IndexNameLease.String(): &memdb.IndexSchema{
+						Name:         IndexNameLease.String(),
 						Unique:       true,
 						AllowMissing: true,
 						Indexer: &memdb.StringFieldIndex{

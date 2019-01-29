@@ -30,19 +30,12 @@ var (
 	contextIndexID = contextIndex{}
 )
 
-type responseType int32
-
-const (
-	responseTypeNonCacheable responseType = iota
-	responseTypeLease
-	responseTypeToken
-)
-
 const (
 	vaultPathTokenRevoke         = "/v1/auth/token/revoke"
 	vaultPathTokenRevokeSelf     = "/v1/auth/token/revoke-self"
 	vaultPathTokenRevokeAccessor = "/v1/auth/token/revoke-accessor"
 	vaultPathTokenRevokeOrphan   = "/v1/auth/token/revoke-orphan"
+	vaultPathTokenLookupSelf     = "/v1/auth/token/lookup-self"
 	vaultPathLeaseRevoke         = "/v1/sys/leases/revoke"
 	vaultPathLeaseRevokeForce    = "/v1/sys/leases/revoke-force"
 	vaultPathLeaseRevokePrefix   = "/v1/sys/leases/revoke-prefix"
@@ -161,26 +154,44 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		RequestPath: req.Request.RequestURI,
 	}
 
-	// Determine the type of the response
-	rType, rValue, err := respType(resp.ResponseBody)
+	secret, err := api.ParseSecret(bytes.NewBuffer(resp.ResponseBody))
 	if err != nil {
-		c.logger.Error("failed to determine the response response type", "error", err)
+		c.logger.Error("failed to parse response as secret", "error", err)
 		return nil, err
 	}
 
 	renewCtxInfo := c.ctxInfo(req.Token)
-	switch rType {
-	case responseTypeLease:
+	switch {
+	case secret.LeaseID != "":
 		newCtxInfo := new(ContextInfo)
 		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
 		renewCtxInfo = newCtxInfo
 
-		index.Lease = rValue
+		index.Lease = secret.LeaseID
 		index.Token = req.Token
-	case responseTypeToken:
-		index.Token = rValue
+
+		// TODO: See if the lookup-self call can be moved to API proxy
+		client, err := api.NewClient(api.DefaultConfig())
+		if err != nil {
+			return nil, err
+		}
+		client.SetToken(index.Token)
+
+		lookupReq := client.NewRequest(http.MethodGet, vaultPathTokenLookupSelf)
+		resp, err := client.RawRequestWithContext(ctx, lookupReq)
+		if err != nil {
+			return nil, err
+		}
+		lookupRespSecret, err := api.ParseSecret(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		index.TokenAccessor = lookupRespSecret.Data["accessor"].(string)
+	case secret.Auth != nil:
+		index.Token = secret.Auth.ClientToken
+		index.TokenAccessor = secret.Auth.Accessor
 		renewCtxInfo = c.ctxInfo(index.Token)
-	case responseTypeNonCacheable:
+	default:
 		return resp, nil
 	}
 
@@ -420,6 +431,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
 		}
+
 	case "token":
 		if clearValue == "" {
 			return nil
@@ -430,8 +442,9 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 
 		// Remove the cancelled context from the map
 		delete(c.tokenContexts, clearValue)
-	case "lease":
-		// Get the cached index for the given lease
+
+	case "token_accessor", "lease":
+		// Get the cached index and cancel the corresponding renewer context
 		index, err := c.db.Get(clearType, clearValue)
 		if err != nil {
 			return err
@@ -439,8 +452,8 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 		if index == nil {
 			return nil
 		}
-		// Cancel its renewer context
 		index.RenewCtxInfo.CancelFunc()
+
 	case "all":
 		// Cancel the base context which triggers all the goroutines to
 		// stop and evict entries from cache.
@@ -457,37 +470,12 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 		if err := c.db.Flush(); err != nil {
 			return err
 		}
+
 	default:
 		return fmt.Errorf("invalid type %q", clearType)
 	}
+
 	return nil
-}
-
-// respType determines the if the response is of type lease, token or
-// non-cacheable.
-func respType(body []byte) (responseType, string, error) {
-	if len(body) == 0 {
-		return responseTypeNonCacheable, "", nil
-	}
-
-	rawBody := map[string]interface{}{}
-	err := json.Unmarshal(body, &rawBody)
-	if err != nil {
-		return responseTypeNonCacheable, "", err
-	}
-
-	if rawVal, ok := rawBody["lease_id"]; ok {
-		if leaseID, ok := rawVal.(string); ok && leaseID != "" {
-			return responseTypeLease, leaseID, nil
-		}
-	}
-
-	if auth, ok := rawBody["auth"]; ok && auth != nil {
-		token := auth.(map[string]interface{})["client_token"].(string)
-		return responseTypeToken, token, nil
-	}
-
-	return responseTypeNonCacheable, "", nil
 }
 
 // handleRevocation checks whether an originating request is an revocation request, and if so
@@ -529,10 +517,19 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, res
 		}
 
 	case path == vaultPathTokenRevokeAccessor:
-		// There is no proper way to evict the corresponded cached entries when the
-		// token accessor is provided. We include this case for completeness, but
-		// simply no-op in here. This will be addressed in the future via the event
-		// system.
+		jsonBody := map[string]interface{}{}
+		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
+			return err
+		}
+		accessor, ok := jsonBody["accessor"]
+		if !ok {
+			return fmt.Errorf("failed to get token from request body")
+		}
+
+		if err := c.handleCacheClear(ctx, "token_accessor", accessor.(string)); err != nil {
+			return err
+		}
+
 	case path == vaultPathTokenRevokeOrphan:
 		// TODO: Figure out how to do revoke-orphan without canceling derived contexts
 

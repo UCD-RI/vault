@@ -175,7 +175,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
 		ID:          id,
-		TokenID:     req.Token,
+		Token:       req.Token,
 		RequestPath: req.Request.RequestURI,
 		Response:    respBytes.Bytes(),
 	}
@@ -424,7 +424,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
 		}
-	case "token_id":
+	case "token":
 		if req.Value == "" {
 			return nil
 		}
@@ -434,7 +434,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 
 		// Remove the cancelled context from the map
 		delete(c.tokenContexts, req.Value)
-	case "lease_id":
+	case "lease":
 		// Get the cached index for the given lease
 		index, err := c.db.Get(req.Type, req.Value)
 		if err != nil {

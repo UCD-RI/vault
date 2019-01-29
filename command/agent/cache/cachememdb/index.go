@@ -15,19 +15,19 @@ type Index struct {
 	// Required: true, Unique: true
 	ID string
 
-	// TokenID is the token fetched the response held by this index
+	// Token is the token that fetched the response held by this index
 	// Required: true, Unique: false
-	TokenID string
+	Token string
 
 	// RequestPath is the path of the request that resulted in the response
 	// held by this index.
 	// Required: true, Unique: false
 	RequestPath string
 
-	// LeaseID is the identifier of the lease in Vault, that belongs to the
+	// Lease is the identifier of the lease in Vault, that belongs to the
 	// response held by this index.
 	// Required: false, Unique: true
-	LeaseID string
+	Lease string
 
 	// Response is the serialized response object that the agent is caching.
 	Response []byte
@@ -43,21 +43,21 @@ type IndexName uint32
 const (
 	IndexNameInvalid IndexName = iota
 	IndexNameID
-	IndexNameLeaseID
+	IndexNameLease
 	IndexNameRequestPath
-	IndexNameTokenID
+	IndexNameToken
 )
 
 func (indexName IndexName) String() string {
 	switch indexName {
 	case IndexNameID:
 		return "id"
-	case IndexNameLeaseID:
-		return "lease_id"
+	case IndexNameLease:
+		return "lease"
 	case IndexNameRequestPath:
 		return "request_path"
-	case IndexNameTokenID:
-		return "token_id"
+	case IndexNameToken:
+		return "token"
 	}
 	return ""
 }
@@ -66,12 +66,12 @@ func indexNameFromString(indexName string) IndexName {
 	switch indexName {
 	case "id":
 		return IndexNameID
-	case "lease_id":
-		return IndexNameLeaseID
+	case "lease":
+		return IndexNameLease
 	case "request_path":
 		return IndexNameRequestPath
-	case "token_id":
-		return IndexNameTokenID
+	case "token":
+		return IndexNameToken
 	default:
 		return IndexNameInvalid
 	}

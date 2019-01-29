@@ -41,11 +41,11 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "ID",
 						},
 					},
-					"token_id": &memdb.IndexSchema{
-						Name:   "token_id",
+					"token": &memdb.IndexSchema{
+						Name:   "token",
 						Unique: false,
 						Indexer: &memdb.StringFieldIndex{
-							Field: "TokenID",
+							Field: "Token",
 						},
 					},
 					"request_path": &memdb.IndexSchema{
@@ -55,12 +55,12 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "RequestPath",
 						},
 					},
-					"lease_id": &memdb.IndexSchema{
-						Name:         "lease_id",
+					"lease": &memdb.IndexSchema{
+						Name:         "lease",
 						Unique:       true,
 						AllowMissing: true,
 						Indexer: &memdb.StringFieldIndex{
-							Field: "LeaseID",
+							Field: "Lease",
 						},
 					},
 				},

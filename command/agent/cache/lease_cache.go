@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/errwrap"
@@ -35,6 +36,16 @@ const (
 	responseTypeNonCacheable responseType = iota
 	responseTypeLease
 	responseTypeToken
+)
+
+const (
+	vaultPathTokenRevoke         = "/v1/auth/token/revoke"
+	vaultPathTokenRevokeSelf     = "/v1/auth/token/revoke-self"
+	vaultPathTokenRevokeAccessor = "/v1/auth/token/revoke-accessor"
+	vaultPathTokenRevokeOrphan   = "/v1/auth/token/revoke-orphan"
+	vaultPathLeaseRevoke         = "/v1/sys/leases/revoke"
+	vaultPathLeaseRevokeForce    = "/v1/sys/leases/revoke-force"
+	vaultPathLeaseRevokePrefix   = "/v1/sys/leases/revoke-prefix"
 )
 
 type ContextInfo struct {
@@ -131,9 +142,24 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	c.logger.Debug("forwarding the request and caching the response", "path", req.Request.RequestURI)
 
+	// Parse and reset body
+	reqBody, err := ioutil.ReadAll(req.Request.Body)
+	if err != nil {
+		c.logger.Debug("failed to read request body")
+		return nil, err
+	}
+	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
+
 	// Pass the request down and get a response
 	resp, err := c.proxier.Send(ctx, req)
 	if err != nil {
+		return nil, err
+	}
+
+	// Determine if this is a revocation request, and if so we clear the proper
+	// cache index(es) as well
+	if err := c.handleRevocation(ctx, req, reqBody, resp.Response.StatusCode); err != nil {
+		c.logger.Error("failed to handle eviction triggered by revocation", "error", err)
 		return nil, err
 	}
 
@@ -399,8 +425,9 @@ func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 			respondError(w, http.StatusBadRequest, err)
 			return
 		}
+		c.logger.Debug("received cache-clear request", "type", req.Type)
 
-		err = c.handleCacheClear(ctx, req)
+		err = c.handleCacheClear(ctx, req.Type, req.Value)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to clear cache: {{err}}", err))
 			return
@@ -410,13 +437,12 @@ func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 	})
 }
 
-func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearRequest) error {
-	c.logger.Debug("received cache-clear request", "type", req.Type)
-	switch req.Type {
+func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue string) error {
+	switch clearType {
 	case "request_path":
 		// Find all the cached entries which has the given request path and
 		// cancel the contexts of all the respective renewers
-		indexes, err := c.db.GetByPrefix(req.Type, req.Value)
+		indexes, err := c.db.GetByPrefix(clearType, clearValue)
 		if err != nil {
 			return err
 		}
@@ -424,18 +450,18 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 			index.RenewCtxInfo.CancelFunc()
 		}
 	case "token":
-		if req.Value == "" {
+		if clearValue == "" {
 			return nil
 		}
 		// Get the context for the given token and cancel its context
-		tokenCtxInfo := c.ctxInfo(req.Value)
+		tokenCtxInfo := c.ctxInfo(clearValue)
 		tokenCtxInfo.CancelFunc()
 
 		// Remove the cancelled context from the map
-		delete(c.tokenContexts, req.Value)
+		delete(c.tokenContexts, clearValue)
 	case "lease":
 		// Get the cached index for the given lease
-		index, err := c.db.Get(req.Type, req.Value)
+		index, err := c.db.Get(clearType, clearValue)
 		if err != nil {
 			return err
 		}
@@ -461,7 +487,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 			return err
 		}
 	default:
-		return fmt.Errorf("invalid type %q", req.Type)
+		return fmt.Errorf("invalid type %q", clearType)
 	}
 	return nil
 }
@@ -469,6 +495,10 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, req *cacheClearReques
 // respType determines the if the response is of type lease, token or
 // non-cacheable.
 func respType(body []byte) (responseType, string, error) {
+	if len(body) == 0 {
+		return responseTypeNonCacheable, "", nil
+	}
+
 	rawBody := map[string]interface{}{}
 	err := json.Unmarshal(body, &rawBody)
 	if err != nil {
@@ -487,4 +517,98 @@ func respType(body []byte) (responseType, string, error) {
 	}
 
 	return responseTypeNonCacheable, "", nil
+}
+
+// handleRevocation checks whether an originating request is an revocation request, and if so
+// performs the proper cache cleanup.
+func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, reqBody []byte, respStatus int) error {
+	// Lease and token revocations return 204's on success. Fast-path if that's
+	// not the case.
+	if respStatus != http.StatusNoContent {
+		return nil
+	}
+
+	if len(reqBody) == 0 {
+		return nil
+	}
+	c.logger.Debug("triggered caching eviction from revocation request")
+
+	path := req.Request.RequestURI
+	// TODO: Handle namespaces
+	switch {
+	case path == vaultPathTokenRevoke:
+		// Get the token from the request body
+		jsonBody := map[string]interface{}{}
+		if err := json.Unmarshal(reqBody, &jsonBody); err != nil {
+			return err
+		}
+		token, ok := jsonBody["token"]
+		if !ok {
+			return fmt.Errorf("failed to get token from request body")
+		}
+
+		// Clear the cache entry associated with the token and all the other
+		// entries belonging to the leases derived from this token.
+		if err := c.handleCacheClear(ctx, "token", token.(string)); err != nil {
+			return err
+		}
+
+	case path == vaultPathTokenRevokeSelf:
+		// Clear the cache entry associated with the token and all the other
+		// entries belonging to the leases derived from this token.
+		if err := c.handleCacheClear(ctx, "token", req.Token); err != nil {
+			return err
+		}
+
+	case path == vaultPathTokenRevokeAccessor:
+		// There is no proper way to evict cache leases when the token accessor
+		// is provided. We include this case for completeness, but simply
+		// no-op in here. This will be addressed in the future via the event
+		// system.
+	case path == vaultPathTokenRevokeOrphan:
+		// TODO: Figure out how to do revoke-orphan without canceling derived contexts
+
+	case path == vaultPathLeaseRevoke:
+		// TODO: Should lease present in the URL itself be considered here?
+		// Get the lease from the request body
+		jsonBody := map[string]interface{}{}
+		if err := json.Unmarshal(reqBody, &jsonBody); err != nil {
+			return err
+		}
+		leaseID, ok := jsonBody["lease_id"]
+		if !ok {
+			return fmt.Errorf("failed to get lease_id from request body")
+		}
+		if err := c.handleCacheClear(ctx, "lease", leaseID.(string)); err != nil {
+			return err
+		}
+
+	case strings.HasPrefix(path, vaultPathLeaseRevokeForce):
+		// Trim the URL path to get the request path prefix
+		prefix := strings.TrimPrefix(path, vaultPathLeaseRevokeForce)
+		// Get all the cache indexes that use the request path containing the
+		// prefix and cancel the renewer context of each.
+		indexes, err := c.db.GetByPrefix("request_path", "/v1"+prefix)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			index.RenewCtxInfo.CancelFunc()
+		}
+
+	case strings.HasPrefix(path, vaultPathLeaseRevokePrefix):
+		// Trim the URL path to get the request path prefix
+		prefix := strings.TrimPrefix(path, vaultPathLeaseRevokePrefix)
+		// Get all the cache indexes that use the request path containing the
+		// prefix and cancel the renewer context of each.
+		indexes, err := c.db.GetByPrefix("request_path", "/v1"+prefix)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			index.RenewCtxInfo.CancelFunc()
+		}
+	}
+
+	return nil
 }

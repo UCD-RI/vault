@@ -169,24 +169,6 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 		index.Lease = secret.LeaseID
 		index.Token = req.Token
-
-		// TODO: See if the lookup-self call can be moved to API proxy
-		client, err := api.NewClient(api.DefaultConfig())
-		if err != nil {
-			return nil, err
-		}
-		client.SetToken(index.Token)
-
-		lookupReq := client.NewRequest(http.MethodGet, vaultPathTokenLookupSelf)
-		resp, err := client.RawRequestWithContext(ctx, lookupReq)
-		if err != nil {
-			return nil, err
-		}
-		lookupRespSecret, err := api.ParseSecret(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		index.TokenAccessor = lookupRespSecret.Data["accessor"].(string)
 	case secret.Auth != nil:
 		index.Token = secret.Auth.ClientToken
 		index.TokenAccessor = secret.Auth.Accessor
@@ -397,7 +379,7 @@ func computeIndexID(req *SendRequest) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// HandleCacheClear is returns a handlerFunc that can perform cache clearing operations
+// HandleCacheClear returns a handlerFunc that can perform cache clearing operations.
 func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		req := new(cacheClearRequest)

@@ -49,8 +49,9 @@ func newDB() (*memdb.MemDB, error) {
 						},
 					},
 					IndexNameTokenAccessor.String(): &memdb.IndexSchema{
-						Name:   IndexNameTokenAccessor.String(),
-						Unique: false,
+						Name:         IndexNameTokenAccessor.String(),
+						Unique:       false,
+						AllowMissing: true,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "TokenAccessor",
 						},

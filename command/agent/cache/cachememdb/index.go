@@ -19,6 +19,10 @@ type Index struct {
 	// Required: true, Unique: false
 	Token string
 
+	// TokenAccessor is the accessor of the token being cached in this index
+	// Required: true, Unique: false
+	TokenAccessor string
+
 	// RequestPath is the path of the request that resulted in the response
 	// held by this index.
 	// Required: true, Unique: false
@@ -46,6 +50,7 @@ const (
 	IndexNameLease
 	IndexNameRequestPath
 	IndexNameToken
+	IndexNameTokenAccessor
 )
 
 func (indexName IndexName) String() string {
@@ -58,6 +63,8 @@ func (indexName IndexName) String() string {
 		return "request_path"
 	case IndexNameToken:
 		return "token"
+	case IndexNameTokenAccessor:
+		return "token_accessor"
 	}
 	return ""
 }
@@ -72,6 +79,8 @@ func indexNameFromString(indexName string) IndexName {
 		return IndexNameRequestPath
 	case "token":
 		return IndexNameToken
+	case "token_accessor":
+		return IndexNameTokenAccessor
 	default:
 		return IndexNameInvalid
 	}

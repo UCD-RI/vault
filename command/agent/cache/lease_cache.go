@@ -89,7 +89,7 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		return nil, fmt.Errorf("missing configuration required params: %v", conf)
 	}
 
-	db, err := cachememdb.NewCacheMemDB()
+	db, err := cachememdb.New()
 	if err != nil {
 		return nil, err
 	}
@@ -561,9 +561,9 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, req
 		}
 
 	case path == vaultPathTokenRevokeAccessor:
-		// There is no proper way to evict cache leases when the token accessor
-		// is provided. We include this case for completeness, but simply
-		// no-op in here. This will be addressed in the future via the event
+		// There is no proper way to evict the corresponded cached entries when the
+		// token accessor is provided. We include this case for completeness, but
+		// simply no-op in here. This will be addressed in the future via the event
 		// system.
 	case path == vaultPathTokenRevokeOrphan:
 		// TODO: Figure out how to do revoke-orphan without canceling derived contexts

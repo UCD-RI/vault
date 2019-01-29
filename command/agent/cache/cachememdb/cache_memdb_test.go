@@ -17,15 +17,15 @@ func testContextInfo() *ContextInfo {
 	}
 }
 
-func TestNewCacheMemDB(t *testing.T) {
-	_, err := NewCacheMemDB()
+func TestNew(t *testing.T) {
+	_, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCacheMemDB_Get(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestCacheMemDB_Get(t *testing.T) {
 }
 
 func TestCacheMemDB_Set(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCacheMemDB_Set(t *testing.T) {
 }
 
 func TestCacheMemDB_Evict(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestCacheMemDB_Evict(t *testing.T) {
 }
 
 func TestCacheMemDB_EvictAll(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 }
 
 func TestCacheMemDB_EvictByPrefix(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 }
 
 func TestCacheMemDB_Flush(t *testing.T) {
-	cache, err := NewCacheMemDB()
+	cache, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}

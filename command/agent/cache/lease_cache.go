@@ -142,14 +142,6 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	c.logger.Debug("forwarding the request and caching the response", "path", req.Request.RequestURI)
 
-	// Parse and reset body
-	reqBody, err := ioutil.ReadAll(req.Request.Body)
-	if err != nil {
-		c.logger.Debug("failed to read request body")
-		return nil, err
-	}
-	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
-
 	// Pass the request down and get a response
 	resp, err := c.proxier.Send(ctx, req)
 	if err != nil {
@@ -158,7 +150,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	// Determine if this is a revocation request, and if so we clear the proper
 	// cache index(es) as well
-	if err := c.handleRevocation(ctx, req, reqBody, resp.Response.StatusCode); err != nil {
+	if err := c.handleRevocation(ctx, req, resp.Response.StatusCode); err != nil {
 		c.logger.Error("failed to handle eviction triggered by revocation", "error", err)
 		return nil, err
 	}
@@ -169,20 +161,8 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		RequestPath: req.Request.RequestURI,
 	}
 
-	// Temporarily hold the response body since serializing the response via
-	// http.Response.Write() will close the body. Reset the response body
-	// afterwards.
-	respBody, err := ioutil.ReadAll(resp.Response.Body)
-	if err != nil {
-		c.logger.Error("failed to read the response body", "error", err)
-		return nil, err
-	}
-
-	// Reset the response body for http.Response.Write to work
-	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
-
 	// Determine the type of the response
-	rType, rValue, err := respType(respBody)
+	rType, rValue, err := respType(resp.ResponseBody)
 	if err != nil {
 		c.logger.Error("failed to determine the response response type", "error", err)
 		return nil, err
@@ -212,7 +192,6 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 	// Reset the response body again for upper layers to read
-	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
 	index.Response = respBytes.Bytes()
 
 	// Store the index ID in the renewer context
@@ -225,7 +204,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	}
 
 	// Start renewing the secret in the response
-	go c.startRenewing(renewCtx, index, req, respBody)
+	go c.startRenewing(renewCtx, index, req, resp.ResponseBody)
 
 	// Store the index in the cache
 	err = c.db.Set(index)
@@ -391,21 +370,13 @@ func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutpu
 func computeIndexID(req *SendRequest) (string, error) {
 	var b bytes.Buffer
 
-	// We need to hold on to the request body to plop it back in since
-	// http.Request.Write will close the reader.
-	body, err := ioutil.ReadAll(req.Request.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read request body: %v", err)
-	}
-	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-
 	// Serialze the request
 	if err := req.Request.Write(&b); err != nil {
 		return "", fmt.Errorf("failed to serialize request: %v", err)
 	}
 
-	// Reset the request body
-	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	// Reset the request body after it has been closed by Write
+	req.Request.Body = ioutil.NopCloser(bytes.NewBuffer(req.RequestBody))
 
 	// Append req.Token into the byte slice. This is needed since auto-auth'ed
 	// requests sets the token directly into SendRequest.Token
@@ -521,16 +492,13 @@ func respType(body []byte) (responseType, string, error) {
 
 // handleRevocation checks whether an originating request is an revocation request, and if so
 // performs the proper cache cleanup.
-func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, reqBody []byte, respStatus int) error {
+func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, respStatus int) error {
 	// Lease and token revocations return 204's on success. Fast-path if that's
 	// not the case.
 	if respStatus != http.StatusNoContent {
 		return nil
 	}
 
-	if len(reqBody) == 0 {
-		return nil
-	}
 	c.logger.Debug("triggered caching eviction from revocation request")
 
 	path := req.Request.RequestURI
@@ -539,7 +507,7 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, req
 	case path == vaultPathTokenRevoke:
 		// Get the token from the request body
 		jsonBody := map[string]interface{}{}
-		if err := json.Unmarshal(reqBody, &jsonBody); err != nil {
+		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return err
 		}
 		token, ok := jsonBody["token"]
@@ -572,7 +540,7 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, req
 		// TODO: Should lease present in the URL itself be considered here?
 		// Get the lease from the request body
 		jsonBody := map[string]interface{}{}
-		if err := json.Unmarshal(reqBody, &jsonBody); err != nil {
+		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return err
 		}
 		leaseID, ok := jsonBody["lease_id"]

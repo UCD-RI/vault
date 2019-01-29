@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -47,24 +49,27 @@ func handler(ctx context.Context, config *Config) http.Handler {
 			token = config.Token
 		}
 
+		// Parse and reset body.
+		reqBody, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			config.Logger.Error("failed to read request body")
+			respondError(w, http.StatusInternalServerError, errors.New("failed to read request body"))
+		}
+		r.Body = ioutil.NopCloser(bytes.NewBuffer(reqBody))
+
 		resp, err := config.Proxier.Send(ctx, &SendRequest{
-			Token:   token,
-			Request: r,
+			Token:       token,
+			Request:     r,
+			RequestBody: reqBody,
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to get the response: {{err}}", err))
 			return
 		}
 
-		respBody, err := ioutil.ReadAll(resp.Response.Body)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to read response body: {{err}}", err))
-			return
-		}
-
 		copyHeader(w.Header(), resp.Response.Header)
 		w.WriteHeader(resp.Response.StatusCode)
-		w.Write(respBody)
+		w.Write(resp.ResponseBody)
 		return
 	})
 }

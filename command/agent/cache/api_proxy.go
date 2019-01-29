@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"io/ioutil"
 
@@ -32,10 +33,7 @@ func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, 
 	client.SetToken(req.Token)
 
 	fwReq := client.NewRequest(req.Request.Method, req.Request.URL.Path)
-	fwReq.BodyBytes, err = ioutil.ReadAll(req.Request.Body)
-	if err != nil {
-		return nil, err
-	}
+	fwReq.BodyBytes = req.RequestBody
 
 	// Make the request to Vault and get the response
 	ap.logger.Info("forwarding request", "path", req.Request.RequestURI)
@@ -44,7 +42,16 @@ func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, 
 		return nil, err
 	}
 
+	// Parse and reset response body
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		ap.logger.Error("failed to read request body", "error", err)
+		return nil, err
+	}
+	resp.Body = ioutil.NopCloser(bytes.NewBuffer(respBody))
+
 	return &SendResponse{
-		Response: resp,
+		Response:     resp,
+		ResponseBody: respBody,
 	}, nil
 }

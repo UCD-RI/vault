@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -69,7 +70,7 @@ func handler(ctx context.Context, config *Config) http.Handler {
 
 		copyHeader(w.Header(), resp.Response.Header)
 		w.WriteHeader(resp.Response.StatusCode)
-		w.Write(resp.ResponseBody)
+		io.Copy(w, resp.Response.Body)
 		return
 	})
 }

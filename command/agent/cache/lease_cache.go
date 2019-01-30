@@ -197,7 +197,11 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		c.logger.Error("failed to serialize response", "error", err)
 		return nil, err
 	}
-	// Reset the response body again for upper layers to read
+
+	// Reset the response body for upper layers to read
+	resp.Response.Body = ioutil.NopCloser(bytes.NewBuffer(resp.ResponseBody))
+
+	// Set the index's Response
 	index.Response = respBytes.Bytes()
 
 	// Store the index ID in the renewer context
@@ -236,6 +240,11 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	secret, err := api.ParseSecret(bytes.NewBuffer(respBody))
 	if err != nil {
 		c.logger.Error("failed to parse secret from response body", "error", err)
+		return
+	}
+
+	// Short-circuit if the secret is not renewable
+	if !secret.Renewable {
 		return
 	}
 

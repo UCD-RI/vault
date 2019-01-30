@@ -355,18 +355,12 @@ func (c *AgentCommand) Run(args []string) int {
 		Logger: c.logger.Named("cache.apiproxy"),
 	})
 
-	// Create a base context for the lease cache layer
-	baseCtx, baseCancelFunc := context.WithCancel(ctx)
-
 	// Create the lease cache proxier and set its underlying proxier to
 	// the API proxier.
 	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		BaseCtxInfo: &cache.ContextInfo{
-			Ctx:        baseCtx,
-			CancelFunc: baseCancelFunc,
-		},
-		Proxier: apiProxy,
-		Logger:  c.logger.Named("cache.leasecache"),
+		BaseContext: ctx,
+		Proxier:     apiProxy,
+		Logger:      c.logger.Named("cache.leasecache"),
 	})
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))

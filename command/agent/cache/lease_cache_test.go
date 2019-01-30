@@ -19,8 +19,9 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 	t.Helper()
 
 	lc, err := NewLeaseCache(&LeaseCacheConfig{
-		Proxier: newMockProxier(responses),
-		Logger:  hclog.NewNullLogger(),
+		BaseContext: context.Background(),
+		Proxier:     newMockProxier(responses),
+		Logger:      hclog.NewNullLogger(),
 	})
 
 	if err != nil {
@@ -39,6 +40,7 @@ func TestLeaseCache_Send(t *testing.T) {
 					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo"}`)),
 				},
 			},
+			ResponseBody: []byte(`{"value": "output", "lease_id": "foo"}`),
 		},
 		&SendResponse{
 			Response: &api.Response{
@@ -47,6 +49,7 @@ func TestLeaseCache_Send(t *testing.T) {
 					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
 				},
 			},
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
 		},
 	}
 	lc := testNewLeaseCache(t, responses)
@@ -159,7 +162,7 @@ func TestLeaseCache_Send_nonCacheable(t *testing.T) {
 func TestLeaseCache_HandleCacheClear(t *testing.T) {
 	lc := testNewLeaseCache(t, nil)
 
-	handler := lc.HandleCacheClear()
+	handler := lc.HandleCacheClear(context.Background())
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -198,19 +201,19 @@ func TestLeaseCache_HandleCacheClear(t *testing.T) {
 		},
 		{
 			"by_request_path",
-			"token_id",
+			"request_path",
 			"foo",
 			http.StatusOK,
 		},
 		{
-			"by_token_id",
-			"token_id",
+			"by_token",
+			"token",
 			"foo",
 			http.StatusOK,
 		},
 		{
-			"by_lease_id",
-			"lease_id",
+			"by_lease",
+			"lease",
 			"foo",
 			http.StatusOK,
 		},
@@ -224,7 +227,7 @@ func TestLeaseCache_HandleCacheClear(t *testing.T) {
 				t.Fatal()
 			}
 			if tc.expectedStatusCode != resp.StatusCode {
-				t.Fatalf("status code mismatch: expected = %v, got = %v", http.StatusOK, resp.StatusCode)
+				t.Fatalf("status code mismatch: expected = %v, got = %v", tc.expectedStatusCode, resp.StatusCode)
 			}
 		})
 	}

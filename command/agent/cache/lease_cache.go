@@ -28,6 +28,7 @@ type contextIndex struct{}
 
 var (
 	contextIndexID = contextIndex{}
+	errInvalidType = errors.New("invalid type provided")
 )
 
 const (
@@ -40,11 +41,6 @@ const (
 	vaultPathLeaseRevokeForce    = "/v1/sys/leases/revoke-force"
 	vaultPathLeaseRevokePrefix   = "/v1/sys/leases/revoke-prefix"
 )
-
-type ContextInfo struct {
-	Ctx        context.Context
-	CancelFunc context.CancelFunc
-}
 
 type cacheClearRequest struct {
 	Type  string `json:"type"`
@@ -64,12 +60,17 @@ type LeaseCache struct {
 }
 
 // LeaseCacheConfig is the configuration for initializing a new
-// Lease
+// Lease.
 type LeaseCacheConfig struct {
-	BaseCtxInfo *ContextInfo
 	BaseContext context.Context
 	Proxier     Proxier
 	Logger      hclog.Logger
+}
+
+// ContextInfo holds a derived context and cancelFunc pair.
+type ContextInfo struct {
+	Ctx        context.Context
+	CancelFunc context.CancelFunc
 }
 
 // NewLeaseCache creates a new instance of a LeaseCache.
@@ -87,13 +88,20 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		return nil, err
 	}
 
+	// Create a base context for the lease cache layer
+	baseCtx, baseCancelFunc := context.WithCancel(conf.BaseContext)
+	baseCtxInfo := &ContextInfo{
+		Ctx:        baseCtx,
+		CancelFunc: baseCancelFunc,
+	}
+
 	return &LeaseCache{
 		proxier:       conf.Proxier,
 		logger:        conf.Logger,
 		db:            db,
 		rand:          rand.New(rand.NewSource(int64(time.Now().Nanosecond()))),
 		tokenContexts: make(map[string]*ContextInfo),
-		baseCtxInfo:   conf.BaseCtxInfo,
+		baseCtxInfo:   baseCtxInfo,
 	}, nil
 }
 
@@ -162,6 +170,9 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	renewCtxInfo := c.ctxInfo(req.Token)
 	switch {
+	case secret == nil:
+		// Fast path for non-cacheable responses
+		return resp, nil
 	case secret.LeaseID != "":
 		newCtxInfo := new(ContextInfo)
 		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
@@ -174,6 +185,8 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		index.TokenAccessor = secret.Auth.Accessor
 		renewCtxInfo = c.ctxInfo(index.Token)
 	default:
+		// We shouldn't be hitting this, but will err on the side of caution and
+		// simply proxy.
 		return resp, nil
 	}
 
@@ -383,17 +396,24 @@ func computeIndexID(req *SendRequest) (string, error) {
 func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		req := new(cacheClearRequest)
-
-		err := jsonutil.DecodeJSONFromReader(r.Body, req)
-		if err != nil && err != io.EOF {
-			respondError(w, http.StatusBadRequest, err)
+		if err := jsonutil.DecodeJSONFromReader(r.Body, req); err != nil {
+			if err == io.EOF {
+				err = errors.New("empty JSON provided")
+			}
+			respondError(w, http.StatusBadRequest, errwrap.Wrapf("failed to parse JSON input: {{err}}", err))
 			return
 		}
+
 		c.logger.Debug("received cache-clear request", "type", req.Type)
 
-		err = c.handleCacheClear(ctx, req.Type, req.Value)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, errwrap.Wrapf("failed to clear cache: {{err}}", err))
+		if err := c.handleCacheClear(ctx, req.Type, req.Value); err != nil {
+			// Default to 500 on error, unless the user provided an invalid type,
+			// which would then be a 400.
+			httpStatus := http.StatusInternalServerError
+			if err == errInvalidType {
+				httpStatus = http.StatusBadRequest
+			}
+			respondError(w, httpStatus, errwrap.Wrapf("failed to clear cache: {{err}}", err))
 			return
 		}
 
@@ -454,7 +474,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 		}
 
 	default:
-		return fmt.Errorf("invalid type %q", clearType)
+		return errInvalidType
 	}
 
 	return nil

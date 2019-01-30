@@ -41,6 +41,13 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "ID",
 						},
 					},
+					IndexNameRequestPath.String(): &memdb.IndexSchema{
+						Name:   IndexNameRequestPath.String(),
+						Unique: false,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "RequestPath",
+						},
+					},
 					IndexNameToken.String(): &memdb.IndexSchema{
 						Name:   IndexNameToken.String(),
 						Unique: false,
@@ -54,13 +61,6 @@ func newDB() (*memdb.MemDB, error) {
 						AllowMissing: true,
 						Indexer: &memdb.StringFieldIndex{
 							Field: "TokenAccessor",
-						},
-					},
-					IndexNameRequestPath.String(): &memdb.IndexSchema{
-						Name:   IndexNameRequestPath.String(),
-						Unique: false,
-						Indexer: &memdb.StringFieldIndex{
-							Field: "RequestPath",
 						},
 					},
 					IndexNameLease.String(): &memdb.IndexSchema{

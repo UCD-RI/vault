@@ -47,11 +47,12 @@ func TestCacheMemDB_Get(t *testing.T) {
 
 	// Populate cache
 	in := &Index{
-		ID:          "foo",
-		TokenID:     "bar",
-		LeaseID:     "baz",
-		RequestPath: "/v1/request/path",
-		Response:    []byte("hello world"),
+		ID:            "test_id",
+		RequestPath:   "/v1/request/path",
+		Token:         "test_token",
+		TokenAccessor: "test_accessor",
+		Lease:         "test_lease",
+		Response:      []byte("hello world"),
 	}
 
 	if err := cache.Set(in); err != nil {
@@ -69,19 +70,24 @@ func TestCacheMemDB_Get(t *testing.T) {
 			in.ID,
 		},
 		{
-			"by_lease_id",
-			"lease_id",
-			in.LeaseID,
-		},
-		{
-			"by_token_id",
-			"token_id",
-			in.TokenID,
-		},
-		{
 			"by_request_path",
 			"request_path",
 			in.RequestPath,
+		},
+		{
+			"by_lease",
+			"lease",
+			in.Lease,
+		},
+		{
+			"by_token",
+			"token",
+			in.Token,
+		},
+		{
+			"by_token_accessor",
+			"token_accessor",
+			in.TokenAccessor,
 		},
 	}
 
@@ -122,18 +128,19 @@ func TestCacheMemDB_Set(t *testing.T) {
 		{
 			"missing_required_fields",
 			&Index{
-				LeaseID: "foo",
+				Lease: "foo",
 			},
 			true,
 		},
 		{
 			"all_fields",
 			&Index{
-				ID:           "foo",
-				TokenID:      "bar",
-				LeaseID:      "baz",
-				RequestPath:  "/v1/request/path",
-				RenewCtxInfo: testContextInfo(),
+				ID:            "test_id",
+				RequestPath:   "/v1/request/path",
+				Token:         "test_token",
+				TokenAccessor: "test_accessor",
+				Lease:         "test_lease",
+				RenewCtxInfo:  testContextInfo(),
 			},
 			false,
 		},
@@ -160,11 +167,12 @@ func TestCacheMemDB_Evict(t *testing.T) {
 	}
 
 	testIndex := &Index{
-		ID:           "foo",
-		TokenID:      "bar",
-		LeaseID:      "baz",
-		RequestPath:  "/v1/request/path",
-		RenewCtxInfo: testContextInfo(),
+		ID:            "test_id",
+		RequestPath:   "/v1/request/path",
+		Token:         "test_token",
+		TokenAccessor: "test_token_accessor",
+		Lease:         "test_lease",
+		RenewCtxInfo:  testContextInfo(),
 	}
 
 	testCases := []struct {
@@ -189,23 +197,9 @@ func TestCacheMemDB_Evict(t *testing.T) {
 			true,
 		},
 		{
-			"by_index_id",
+			"by_id",
 			"id",
-			"foo",
-			testIndex,
-			false,
-		},
-		{
-			"by_token_id",
-			"token_id",
-			"bar",
-			testIndex,
-			false,
-		},
-		{
-			"by_lease_id",
-			"id",
-			"baz",
+			"test_id",
 			testIndex,
 			false,
 		},
@@ -213,6 +207,27 @@ func TestCacheMemDB_Evict(t *testing.T) {
 			"by_request_path",
 			"request_path",
 			"/v1/request/path",
+			testIndex,
+			false,
+		},
+		{
+			"by_token",
+			"token",
+			"test_token",
+			testIndex,
+			false,
+		},
+		{
+			"by_token_accessor",
+			"token_accessor",
+			"test_accessor",
+			testIndex,
+			false,
+		},
+		{
+			"by_lease",
+			"lease",
+			"test_lease",
 			testIndex,
 			false,
 		},
@@ -244,35 +259,60 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testTokenIDIndexes := []*Index{
+	// The following set inserts indexes using the same token for
+	// multi-eviction
+	testTokenIndexes := []*Index{
 		&Index{
-			ID:           "key1",
-			TokenID:      "bar",
-			LeaseID:      "lease1",
+			ID:           "test_id_1",
+			Token:        "test_token",
+			Lease:        "test_lease_1",
 			RequestPath:  "/v1/request/path/1",
 			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
-			ID:           "key2",
-			TokenID:      "bar",
-			LeaseID:      "lease2",
+			ID:           "test_id_2",
+			Token:        "test_token",
+			Lease:        "test_lease_2",
 			RequestPath:  "/v1/request/path/2",
 			RenewCtxInfo: testContextInfo(),
 		},
 	}
 
+	// The following set inserts indexes using the same token accessor for
+	// multi-eviction
+	testTokenAccessorIndexes := []*Index{
+		&Index{
+			ID:            "test_id_1",
+			Token:         "test_token",
+			TokenAccessor: "test_token_accessor",
+			Lease:         "test_lease_1",
+			RequestPath:   "/v1/request/path/1",
+			RenewCtxInfo:  testContextInfo(),
+		},
+		&Index{
+			ID:            "test_id_2",
+			Token:         "test_token",
+			TokenAccessor: "test_token_accessor",
+			Lease:         "test_lease_2",
+			RequestPath:   "/v1/request/path/2",
+			RenewCtxInfo:  testContextInfo(),
+		},
+	}
+
+	// The following set inserts indexes using the same requestpath for
+	// multi-eviction
 	testReqPathIndexes := []*Index{
 		&Index{
-			ID:           "key1",
-			TokenID:      "token1",
-			LeaseID:      "lease1",
+			ID:           "test_id_1",
+			Token:        "test_token_1",
+			Lease:        "test_lease_1",
 			RequestPath:  "/v1/request/path",
 			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
-			ID:           "key2",
-			TokenID:      "token2",
-			LeaseID:      "lease2",
+			ID:           "test_id_2",
+			Token:        "test_token_2",
+			Lease:        "test_lease_2",
 			RequestPath:  "/v1/request/path",
 			RenewCtxInfo: testContextInfo(),
 		},
@@ -300,10 +340,17 @@ func TestCacheMemDB_EvictAll(t *testing.T) {
 			true,
 		},
 		{
-			"by_token_id",
-			"token_id",
-			"bar",
-			testTokenIDIndexes,
+			"by_token",
+			"token",
+			"test_token",
+			testTokenIndexes,
+			false,
+		},
+		{
+			"by_token_accessor",
+			"token_accessor",
+			"test_token_accessor",
+			testTokenAccessorIndexes,
 			false,
 		},
 		{
@@ -354,18 +401,18 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testLeaseIDIndexes := []*Index{
+	testLeaseIndexes := []*Index{
 		&Index{
-			ID:           "key1",
-			TokenID:      "token2",
-			LeaseID:      "baz/1",
+			ID:           "test_id_1",
+			Token:        "test_token_1",
+			Lease:        "baz/1",
 			RequestPath:  "/v1/request/path",
 			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
-			ID:           "key2",
-			TokenID:      "token2",
-			LeaseID:      "baz/2",
+			ID:           "test_id_2",
+			Token:        "test_token_2",
+			Lease:        "baz/2",
 			RequestPath:  "/v1/request/path",
 			RenewCtxInfo: testContextInfo(),
 		},
@@ -373,16 +420,16 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 
 	testReqPathIndexes := []*Index{
 		&Index{
-			ID:           "key1",
-			TokenID:      "token1",
-			LeaseID:      "lease1",
+			ID:           "test_id_1",
+			Token:        "test_token_1",
+			Lease:        "test_lease_1",
 			RequestPath:  "/v1/request/path/1",
 			RenewCtxInfo: testContextInfo(),
 		},
 		&Index{
-			ID:           "key2",
-			TokenID:      "token2",
-			LeaseID:      "lease2",
+			ID:           "test_id_2",
+			Token:        "test_token_2",
+			Lease:        "test_lease_2",
 			RequestPath:  "/v1/request/path/2",
 			RenewCtxInfo: testContextInfo(),
 		},
@@ -410,10 +457,10 @@ func TestCacheMemDB_EvictByPrefix(t *testing.T) {
 			true,
 		},
 		{
-			"by_lease_id",
-			"lease_id",
+			"by_lease",
+			"lease",
 			"baz",
-			testLeaseIDIndexes,
+			testLeaseIndexes,
 			false,
 		},
 		{
@@ -467,9 +514,9 @@ func TestCacheMemDB_Flush(t *testing.T) {
 
 	// Populate cache
 	in := &Index{
-		ID:          "foo",
-		TokenID:     "bar",
-		LeaseID:     "baz",
+		ID:          "test_id",
+		Token:       "test_token",
+		Lease:       "test_lease",
 		RequestPath: "/v1/request/path",
 		Response:    []byte("hello world"),
 	}
@@ -484,7 +531,7 @@ func TestCacheMemDB_Flush(t *testing.T) {
 	}
 
 	// Check the cache doesn't contain inserted index
-	out, err := cache.Get(IndexNameID.String(), "foo")
+	out, err := cache.Get(IndexNameID.String(), "test_id")
 	if err != nil {
 		t.Fatal(err)
 	}

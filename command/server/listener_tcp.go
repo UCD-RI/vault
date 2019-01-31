@@ -35,7 +35,7 @@ func tcpListenerFactory(config map[string]interface{}, _ io.Writer, ui cli.Ui) (
 		return nil, nil, nil, err
 	}
 
-	ln = TcpKeepAliveListener{ln.(*net.TCPListener)}
+	ln = TCPKeepAliveListener{ln.(*net.TCPListener)}
 
 	ln, err = listenerWrapProxy(ln, config)
 	if err != nil {
@@ -97,17 +97,17 @@ func tcpListenerFactory(config map[string]interface{}, _ io.Writer, ui cli.Ui) (
 	return ListenerWrapTLS(ln, props, config, ui)
 }
 
-// TcpKeepAliveListener sets TCP keep-alive timeouts on accepted
+// TCPKeepAliveListener sets TCP keep-alive timeouts on accepted
 // connections. It's used by ListenAndServe and ListenAndServeTLS so
 // dead TCP connections (e.g. closing laptop mid-download) eventually
 // go away.
 //
 // This is copied directly from the Go source code.
-type TcpKeepAliveListener struct {
+type TCPKeepAliveListener struct {
 	*net.TCPListener
 }
 
-func (ln TcpKeepAliveListener) Accept() (c net.Conn, err error) {
+func (ln TCPKeepAliveListener) Accept() (c net.Conn, err error) {
 	tc, err := ln.AcceptTCP()
 	if err != nil {
 		return

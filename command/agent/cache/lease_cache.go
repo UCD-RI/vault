@@ -32,6 +32,7 @@ var (
 )
 
 const (
+	vaultPathTokenCreate         = "/v1/auth/token/create"
 	vaultPathTokenRevoke         = "/v1/auth/token/revoke"
 	vaultPathTokenRevokeSelf     = "/v1/auth/token/revoke-self"
 	vaultPathTokenRevokeAccessor = "/v1/auth/token/revoke-accessor"
@@ -71,6 +72,7 @@ type LeaseCacheConfig struct {
 type ContextInfo struct {
 	Ctx        context.Context
 	CancelFunc context.CancelFunc
+	DoneCh     chan struct{}
 }
 
 // NewLeaseCache creates a new instance of a LeaseCache.
@@ -125,7 +127,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 
 	// Cached request is found, deserialize the response and return early
 	if index != nil {
-		c.logger.Debug("returning cached response", "path", req.Request.RequestURI)
+		c.logger.Debug("returning cached response", "path", req.Request.URL.Path)
 
 		reader := bufio.NewReader(bytes.NewReader(index.Response))
 		resp, err := http.ReadResponse(reader, nil)
@@ -141,7 +143,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		}, nil
 	}
 
-	c.logger.Debug("forwarding the request and caching the response", "path", req.Request.RequestURI)
+	c.logger.Debug("forwarding the request and caching the response", "path", req.Request.URL.Path)
 
 	// Pass the request down and get a response
 	resp, err := c.proxier.Send(ctx, req)
@@ -149,17 +151,10 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
-	// Determine if this is a revocation request, and if so we clear the proper
-	// cache index(es) as well
-	if err := c.handleRevocation(ctx, req, resp.Response.StatusCode); err != nil {
-		c.logger.Error("failed to handle eviction triggered by revocation", "error", err)
-		return nil, err
-	}
-
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
 		ID:          id,
-		RequestPath: req.Request.RequestURI,
+		RequestPath: req.Request.URL.Path,
 	}
 
 	secret, err := api.ParseSecret(bytes.NewBuffer(resp.ResponseBody))
@@ -168,7 +163,12 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
-	renewCtxInfo := c.ctxInfo(req.Token)
+	if err := c.processResponse(ctx, index, req, resp, secret); err != nil {
+		c.logger.Error("failed to process the response", "error", err)
+		return nil, err
+	}
+
+	renewCtxInfo := c.ctxInfo(nil, req.Token)
 	switch {
 	case secret == nil:
 		// Fast path for non-cacheable responses
@@ -183,7 +183,11 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	case secret.Auth != nil:
 		index.Token = secret.Auth.ClientToken
 		index.TokenAccessor = secret.Auth.Accessor
-		renewCtxInfo = c.ctxInfo(index.Token)
+		var parentCtx context.Context
+		if index.TokenParent == req.Token {
+			parentCtx = renewCtxInfo.Ctx
+		}
+		renewCtxInfo = c.ctxInfo(parentCtx, index.Token)
 	default:
 		// We shouldn't be hitting this, but will err on the side of caution and
 		// simply proxy.
@@ -211,6 +215,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	index.RenewCtxInfo = &cachememdb.ContextInfo{
 		Ctx:        renewCtx,
 		CancelFunc: renewCtxInfo.CancelFunc,
+		DoneCh:     make(chan struct{}),
 	}
 
 	// Start renewing the secret in the response
@@ -226,11 +231,15 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	return resp, nil
 }
 
-func (c *LeaseCache) ctxInfo(token string) *ContextInfo {
+func (c *LeaseCache) ctxInfo(ctx context.Context, token string) *ContextInfo {
+	if ctx == nil {
+		ctx = c.baseCtxInfo.Ctx
+	}
 	ctxInfo, ok := c.tokenContexts[token]
 	if !ok {
 		ctxInfo = new(ContextInfo)
-		ctxInfo.Ctx, ctxInfo.CancelFunc = context.WithCancel(c.baseCtxInfo.Ctx)
+		ctxInfo.Ctx, ctxInfo.CancelFunc = context.WithCancel(ctx)
+		ctxInfo.DoneCh = make(chan struct{})
 		c.tokenContexts[token] = ctxInfo
 	}
 	return ctxInfo
@@ -256,7 +265,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	// Add a jitter of +-10% to half time
 	backoffDuration := time.Second * time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100)
 
-	c.logger.Debug("initiating backoff", "path", req.Request.RequestURI, "duration", backoffDuration.String())
+	c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
 	contextutil.BackoffOrQuit(ctx, backoffDuration)
 
 	cleanupFunc := func() {
@@ -272,7 +281,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	// Fast path for shutdown
 	select {
 	case <-ctx.Done():
-		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.RequestURI)
+		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.URL.Path)
 		cleanupFunc()
 		return
 	default:
@@ -296,7 +305,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 			return
 		}
 
-		c.logger.Debug("initiating renewal", "path", req.Request.RequestURI)
+		c.logger.Debug("initiating renewal", "path", req.Request.URL.Path)
 		go renewer.Renew()
 		defer renewer.Stop()
 
@@ -304,21 +313,21 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		for {
 			select {
 			case <-ctx.Done():
-				c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.RequestURI)
+				c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.URL.Path)
 				return
 			case err := <-renewer.DoneCh():
 				if err != nil {
 					c.logger.Error("failed to renew secret", "error", err)
 					return
 				}
-				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.RequestURI)
+				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.URL.Path)
 
 				// Backoff from returning until the last bits of the lease
 				// duration is consumed
 				contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(lastLeaseDuration))
 				return
 			case renewal := <-renewer.RenewCh():
-				c.logger.Debug("renewal received; updating cache", "path", req.Request.RequestURI)
+				c.logger.Debug("renewal received; updating cache", "path", req.Request.URL.Path)
 				err = c.updateResponse(ctx, renewal)
 				if err != nil {
 					c.logger.Error("failed to handle renewal", "error", err)
@@ -328,8 +337,12 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				if renewal.Secret.Auth != nil {
 					lastLeaseDuration = renewal.Secret.Auth.LeaseDuration
 				}
+			case <-index.RenewCtxInfo.DoneCh:
+				c.logger.Debug("done channel closed")
+				return
 			}
 		}
+
 	}(ctx, secret)
 }
 
@@ -448,7 +461,7 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 			return nil
 		}
 		// Get the context for the given token and cancel its context
-		tokenCtxInfo := c.ctxInfo(clearValue)
+		tokenCtxInfo := c.ctxInfo(nil, clearValue)
 		tokenCtxInfo.CancelFunc()
 
 		// Remove the cancelled context from the map
@@ -489,16 +502,26 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 	return nil
 }
 
-// handleRevocation checks whether an originating request is an revocation request, and if so
-// performs the proper cache cleanup.
-func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, respStatus int) error {
+func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Index, req *SendRequest, resp *SendResponse, secret *api.Secret) error {
+	path := req.Request.URL.Path
+
+	// If the response is a token creation response and if the token created is
+	// not an orphan, then set the TokenParent in the cached index.
+	if strings.HasPrefix(path, vaultPathTokenCreate) && resp.Response.StatusCode == http.StatusOK && !secret.Auth.Orphan {
+		index.TokenParent = req.Token
+	}
+
+	//
+	// Check whether the originating request is a revocation request, and if so
+	// perform applicable cache cleanups.
+	//
+
 	// Lease and token revocations return 204's on success. Fast-path if that's
 	// not the case.
-	if respStatus != http.StatusNoContent {
+	if resp.Response.StatusCode != http.StatusNoContent {
 		return nil
 	}
 
-	path := req.Request.RequestURI
 	// TODO: Handle namespaces
 	switch {
 	case path == vaultPathTokenRevoke:
@@ -532,7 +555,7 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, res
 		}
 		accessor, ok := jsonBody["accessor"]
 		if !ok {
-			return fmt.Errorf("failed to get token from request body")
+			return fmt.Errorf("failed to get accessor from request body")
 		}
 
 		if err := c.handleCacheClear(ctx, "token_accessor", accessor.(string)); err != nil {
@@ -540,7 +563,48 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, res
 		}
 
 	case path == vaultPathTokenRevokeOrphan:
-		// TODO: Figure out how to do revoke-orphan without canceling derived contexts
+		jsonBody := map[string]interface{}{}
+		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
+			return err
+		}
+		token, ok := jsonBody["token"]
+		if !ok {
+			return fmt.Errorf("failed to get token from request body")
+		}
+
+		// Find out all the indexes that are directly tied to the revoked token
+		indexes, err := c.db.GetByPrefix(cachememdb.IndexNameToken.String(), token.(string))
+		if err != nil {
+			return err
+		}
+
+		// Out of these indexes, one will be for the token itself and the rest
+		// will be for leases of this token. Cancel the contexts of all the
+		// leases and return from renewer goroutine for the token's index
+		// without cancelling the context. Cancelling the context of the
+		// token's renewer will evict all the child tokens which is not
+		// desired.
+		for _, index := range indexes {
+			if index.Lease != "" {
+				index.RenewCtxInfo.CancelFunc()
+			} else {
+				close(index.RenewCtxInfo.DoneCh)
+			}
+		}
+
+		// Clear the parent references of the revoked token
+		indexes, err = c.db.GetByPrefix(cachememdb.IndexNameTokenParent.String(), token.(string))
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			index.TokenParent = ""
+			err = c.db.Set(index)
+			if err != nil {
+				c.logger.Error("failed to persist index", "error", err)
+				return err
+			}
+		}
 
 	case path == vaultPathLeaseRevoke:
 		// TODO: Should lease present in the URL itself be considered here?

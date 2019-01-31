@@ -5,6 +5,7 @@ import "context"
 type ContextInfo struct {
 	Ctx        context.Context
 	CancelFunc context.CancelFunc
+	DoneCh     chan struct{}
 }
 
 // Index holds the response to be cached along with multiple other values that
@@ -18,6 +19,10 @@ type Index struct {
 	// Token is the token that fetched the response held by this index
 	// Required: true, Unique: false
 	Token string
+
+	// TokenParent is the parent token of the token held by this index
+	// Required: false, Unique: false
+	TokenParent string
 
 	// TokenAccessor is the accessor of the token being cached in this index
 	// Required: true, Unique: false
@@ -51,6 +56,7 @@ const (
 	IndexNameRequestPath
 	IndexNameToken
 	IndexNameTokenAccessor
+	IndexNameTokenParent
 )
 
 func (indexName IndexName) String() string {
@@ -65,6 +71,8 @@ func (indexName IndexName) String() string {
 		return "token"
 	case IndexNameTokenAccessor:
 		return "token_accessor"
+	case IndexNameTokenParent:
+		return "token_parent"
 	}
 	return ""
 }
@@ -81,6 +89,8 @@ func indexNameFromString(indexName string) IndexName {
 		return IndexNameToken
 	case "token_accessor":
 		return IndexNameTokenAccessor
+	case "token_parent":
+		return IndexNameTokenParent
 	default:
 		return IndexNameInvalid
 	}

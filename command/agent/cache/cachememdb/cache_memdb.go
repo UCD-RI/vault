@@ -55,6 +55,14 @@ func newDB() (*memdb.MemDB, error) {
 							Field: "Token",
 						},
 					},
+					IndexNameTokenParent.String(): &memdb.IndexSchema{
+						Name:         IndexNameTokenParent.String(),
+						Unique:       false,
+						AllowMissing: true,
+						Indexer: &memdb.StringFieldIndex{
+							Field: "TokenParent",
+						},
+					},
 					IndexNameTokenAccessor.String(): &memdb.IndexSchema{
 						Name:         IndexNameTokenAccessor.String(),
 						Unique:       false,

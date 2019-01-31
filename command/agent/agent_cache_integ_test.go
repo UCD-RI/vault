@@ -14,7 +14,6 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/builtin/logical/pki"
 	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/helper/logging"
 	vaulthttp "github.com/hashicorp/vault/http"
@@ -258,7 +257,7 @@ func TestInteg_Cache_LeaseResponse(t *testing.T) {
 		DisableCache: true,
 		Logger:       hclog.NewNullLogger(),
 		LogicalBackends: map[string]logical.Factory{
-			"pki": pki.Factory,
+			"kv": vault.LeasedPassthroughBackendFactory,
 		},
 	}
 
@@ -272,26 +271,8 @@ func TestInteg_Cache_LeaseResponse(t *testing.T) {
 	vault.TestWaitActive(t, cores[0].Core)
 	client := cores[0].Client
 
-	err := client.Sys().Mount("pki", &api.MountInput{
-		Type: "pki",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = client.Logical().Write("pki/root/generate/internal", map[string]interface{}{
-		"ttl":         "40h",
-		"common_name": "myvault.com",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a cert role. We enable lease generation in order to test the cache
-	_, err = client.Logical().Write("pki/roles/test", map[string]interface{}{
-		"allow_any_name":    true,
-		"enforce_hostnames": false,
-		"generate_lease":    true,
+	err := client.Sys().Mount("kv", &api.MountInput{
+		Type: "kv",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -354,25 +335,61 @@ func TestInteg_Cache_LeaseResponse(t *testing.T) {
 
 	testClient.SetToken(cluster.RootToken)
 
-	// Issue a cert generation request, make sure that the subsequent request comes from the cache
+	// Test proxy by issuing two different requests
 	{
-		proxyResp, err := testClient.Logical().Write("pki/issue/test", map[string]interface{}{
-			"common_name": "foobar",
-			"ttl":         "1h",
+		// Write data to the lease-kv backend
+		_, err := testClient.Logical().Write("kv/foo", map[string]interface{}{
+			"value": "bar",
+			"ttl":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = testClient.Logical().Write("kv/foobar", map[string]interface{}{
+			"value": "bar",
+			"ttl":   "1h",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		cacheResp, err := testClient.Logical().Write("pki/issue/test", map[string]interface{}{
-			"common_name": "foobar",
-			"ttl":         "1h",
+		firstResp, err := testClient.Logical().Read("kv/foo")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		secondResp, err := testClient.Logical().Read("kv/foobar")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if diff := deep.Equal(firstResp, secondResp); diff == nil {
+			t.Logf("response: %#v", firstResp)
+			t.Fatal("expected proxied responses, got cached response on second request")
+		}
+	}
+
+	// Test caching behavior by issue the same request twice
+	{
+		_, err := testClient.Logical().Write("kv/baz", map[string]interface{}{
+			"value": "foo",
+			"ttl":   "1h",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if diff := deep.Equal(proxyResp, cacheResp); diff != nil {
+		proxiedResp, err := testClient.Logical().Read("kv/baz")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cachedResp, err := testClient.Logical().Read("kv/baz")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if diff := deep.Equal(proxiedResp, cachedResp); diff != nil {
 			t.Fatal(diff)
 		}
 	}

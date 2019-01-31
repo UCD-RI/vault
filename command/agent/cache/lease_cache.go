@@ -498,8 +498,6 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, res
 		return nil
 	}
 
-	c.logger.Debug("triggered caching eviction from revocation request")
-
 	path := req.Request.RequestURI
 	// TODO: Handle namespaces
 	switch {
@@ -584,7 +582,11 @@ func (c *LeaseCache) handleRevocation(ctx context.Context, req *SendRequest, res
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
 		}
+	default:
+		return nil
 	}
+
+	c.logger.Debug("triggered caching eviction from revocation request")
 
 	return nil
 }

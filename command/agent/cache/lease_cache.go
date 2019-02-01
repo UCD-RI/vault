@@ -44,8 +44,9 @@ const (
 )
 
 type cacheClearRequest struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Type      string `json:"type"`
+	Value     string `json:"value"`
+	Namespace string `json:"namespace"`
 }
 
 // LeaseCache is an implementation of Proxier that handles
@@ -112,7 +113,6 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 // underlying Proxier and cache the received response.
 func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	// Compute the index ID
-	// TODO: Determine whether it's better to pass in a cloned object instead of modifying the incoming one.
 	id, err := computeIndexID(req)
 	if err != nil {
 		c.logger.Error("failed to compute cache key", "error", err)
@@ -151,9 +151,18 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
+	// Get the namespace from the request header
+	namespace := req.Request.Header.Get("X-Vault-Namespace")
+	// We need to populate an empty value since go-memdb will skip over indexes
+	// that contain empty values.
+	if namespace == "" {
+		namespace = "root/"
+	}
+
 	// Build the index to cache based on the response received
 	index = &cachememdb.Index{
 		ID:          id,
+		Namespace:   namespace,
 		RequestPath: req.Request.URL.Path,
 	}
 
@@ -432,9 +441,9 @@ func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 			return
 		}
 
-		c.logger.Debug("received cache-clear request", "type", req.Type)
+		c.logger.Debug("received cache-clear request", "type", req.Type, "namespace", req.Namespace, "value", req.Value)
 
-		if err := c.handleCacheClear(ctx, req.Type, req.Value); err != nil {
+		if err := c.handleCacheClear(ctx, req.Type, req.Namespace, req.Value); err != nil {
 			// Default to 500 on error, unless the user provided an invalid type,
 			// which would then be a 400.
 			httpStatus := http.StatusInternalServerError
@@ -449,12 +458,35 @@ func (c *LeaseCache) HandleCacheClear(ctx context.Context) http.Handler {
 	})
 }
 
-func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue string) error {
+func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, clearValues ...interface{}) error {
+	if len(clearValues) == 0 {
+		return errors.New("no value(s) provided to clear corresponding cache entries")
+	}
+
+	// The value that we want to clear, for most cases, is the last one provided.
+	clearValue, ok := clearValues[len(clearValues)-1].(string)
+	if !ok {
+		return fmt.Errorf("unable to convert %v to type string", clearValue)
+	}
+
 	switch clearType {
 	case "request_path":
+		// For this particular case, we need to ensure that there are 2 provided
+		// indexers for the proper lookup.
+		if len(clearValues) != 2 {
+			return fmt.Errorf("clearing cache by request path requires 2 indexers, got %d", len(clearValues))
+		}
+
+		// The first value provided for this case will be the namespace, but if it's
+		// an empty value we need to overwrite it with "root/" to ensure proper
+		// cache lookup.
+		if clearValues[0].(string) == "" {
+			clearValues[0] = "root/"
+		}
+
 		// Find all the cached entries which has the given request path and
 		// cancel the contexts of all the respective renewers
-		indexes, err := c.db.GetByPrefix(clearType, clearValue)
+		indexes, err := c.db.GetByPrefix(clearType, clearValues...)
 		if err != nil {
 			return err
 		}
@@ -504,6 +536,8 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType, clearValue
 	default:
 		return errInvalidType
 	}
+
+	c.logger.Debug("successfully cleared matching cache entries")
 
 	return nil
 }

@@ -28,6 +28,10 @@ type Index struct {
 	// Required: true, Unique: false
 	TokenAccessor string
 
+	// Namespace is the namespace on that was provided in the request path as
+	// the Vault namespace to query
+	Namespace string
+
 	// RequestPath is the path of the request that resulted in the response
 	// held by this index.
 	// Required: true, Unique: false

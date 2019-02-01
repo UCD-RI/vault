@@ -44,8 +44,15 @@ func newDB() (*memdb.MemDB, error) {
 					IndexNameRequestPath.String(): &memdb.IndexSchema{
 						Name:   IndexNameRequestPath.String(),
 						Unique: false,
-						Indexer: &memdb.StringFieldIndex{
-							Field: "RequestPath",
+						Indexer: &memdb.CompoundIndex{
+							Indexes: []memdb.Indexer{
+								&memdb.StringFieldIndex{
+									Field: "Namespace",
+								},
+								&memdb.StringFieldIndex{
+									Field: "RequestPath",
+								},
+							},
 						},
 					},
 					IndexNameToken.String(): &memdb.IndexSchema{
@@ -93,14 +100,14 @@ func newDB() (*memdb.MemDB, error) {
 
 // GetByPrefix returns all the cached indexes based on the index name and the
 // value prefix.
-func (c *CacheMemDB) GetByPrefix(indexName, prefix string) ([]*Index, error) {
+func (c *CacheMemDB) GetByPrefix(indexName string, indexValues ...interface{}) ([]*Index, error) {
 	indexName = indexName + "_prefix"
 
 	txn := c.db.Txn(false)
 	defer txn.Abort()
 
 	// Get all the objects
-	iter, err := txn.Get(tableNameIndexer, indexName, prefix)
+	iter, err := txn.Get(tableNameIndexer, indexName, indexValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +129,7 @@ func (c *CacheMemDB) GetByPrefix(indexName, prefix string) ([]*Index, error) {
 	return indexes, nil
 }
 
-func (c *CacheMemDB) Get(indexName, indexValue string) (*Index, error) {
+func (c *CacheMemDB) Get(indexName string, indexValues ...interface{}) (*Index, error) {
 	in := indexNameFromString(indexName)
 	if in == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", indexName)
@@ -131,7 +138,7 @@ func (c *CacheMemDB) Get(indexName, indexValue string) (*Index, error) {
 	txn := c.db.Txn(false)
 	defer txn.Abort()
 
-	raw, err := txn.First(tableNameIndexer, indexName, indexValue)
+	raw, err := txn.First(tableNameIndexer, indexName, indexValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -167,8 +174,8 @@ func (c *CacheMemDB) Set(index *Index) error {
 }
 
 // Evict removes an index from the cache based on index name and value.
-func (c *CacheMemDB) Evict(indexName, indexValue string) error {
-	index, err := c.Get(indexName, indexValue)
+func (c *CacheMemDB) Evict(indexName string, indexValues ...interface{}) error {
+	index, err := c.Get(indexName, indexValues...)
 	if err != nil {
 		return fmt.Errorf("unable to fetch index on cache deletion: %v", err)
 	}
@@ -191,15 +198,15 @@ func (c *CacheMemDB) Evict(indexName, indexValue string) error {
 
 // EvictAll removes all matching indexes from the cache based on index name and value.
 func (c *CacheMemDB) EvictAll(indexName, indexValue string) error {
-	return c.batchEvict(indexName, indexValue, false)
+	return c.batchEvict(false, indexName, indexValue)
 }
 
 // EvictByPrefix removes all matching prefix indexes from the cache based on index name and prefix.
 func (c *CacheMemDB) EvictByPrefix(indexName, indexPrefix string) error {
-	return c.batchEvict(indexName, indexPrefix, true)
+	return c.batchEvict(true, indexName, indexPrefix)
 }
 
-func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) error {
+func (c *CacheMemDB) batchEvict(isPrefix bool, indexName string, indexValues ...interface{}) error {
 	if isPrefix {
 		indexName = indexName + "_prefix"
 	}
@@ -207,7 +214,7 @@ func (c *CacheMemDB) batchEvict(indexName, indexValue string, isPrefix bool) err
 	txn := c.db.Txn(true)
 	defer txn.Abort()
 
-	_, err := txn.DeleteAll(tableNameIndexer, indexName, indexValue)
+	_, err := txn.DeleteAll(tableNameIndexer, indexName, indexValues...)
 	if err != nil {
 		return err
 	}

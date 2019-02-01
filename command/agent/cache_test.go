@@ -20,7 +20,7 @@ import (
 	"github.com/hashicorp/vault/vault"
 )
 
-func TestInteg_Cache_nonCacheable(t *testing.T) {
+func TestCache_nonCacheable(t *testing.T) {
 	coreConfig := &vault.CoreConfig{
 		DisableMlock: true,
 		DisableCache: true,
@@ -81,8 +81,7 @@ func TestInteg_Cache_nonCacheable(t *testing.T) {
 		Proxier:          leaseCache,
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
-		Handler:          mux,
-		Logger:           cacheLogger.Named("cache.handler"),
+		Logger:           cacheLogger.Named("cache"),
 	})
 
 	// Clone a client to query from the agent's listener address
@@ -126,7 +125,7 @@ func TestInteg_Cache_nonCacheable(t *testing.T) {
 	}
 }
 
-func TestInteg_Cache_AuthResponse(t *testing.T) {
+func TestCache_AuthResponse(t *testing.T) {
 	coreConfig := &vault.CoreConfig{
 		DisableMlock: true,
 		DisableCache: true,
@@ -158,34 +157,12 @@ func TestInteg_Cache_AuthResponse(t *testing.T) {
 	}
 	defer listener.Close()
 
-	// Create the API proxier
-	apiProxy := cache.NewAPIProxy(&cache.APIProxyConfig{
-		Logger: cacheLogger.Named("cache.apiproxy"),
-	})
-
-	// Create the lease cache proxier and set its underlying proxier to
-	// the API proxier.
-	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		BaseContext: ctx,
-		Proxier:     apiProxy,
-		Logger:      cacheLogger.Named("cache.leasecache"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a muxer and add paths relevant for the lease cache layer
-	mux := http.NewServeMux()
-	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
-
 	// Start listening to requests
 	cache.Run(ctx, &cache.Config{
 		Token:            client.Token(),
-		Proxier:          leaseCache,
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
-		Handler:          mux,
-		Logger:           cacheLogger.Named("cache.handler"),
+		Logger:           cacheLogger.Named("cache"),
 	})
 
 	// Clone a client to query from the agent's listener address
@@ -251,7 +228,7 @@ func TestInteg_Cache_AuthResponse(t *testing.T) {
 	}
 }
 
-func TestInteg_Cache_LeaseResponse(t *testing.T) {
+func TestCache_LeaseResponse(t *testing.T) {
 	coreConfig := &vault.CoreConfig{
 		DisableMlock: true,
 		DisableCache: true,
@@ -293,34 +270,12 @@ func TestInteg_Cache_LeaseResponse(t *testing.T) {
 	}
 	defer listener.Close()
 
-	// Create the API proxier
-	apiProxy := cache.NewAPIProxy(&cache.APIProxyConfig{
-		Logger: cacheLogger.Named("cache.apiproxy"),
-	})
-
-	// Create the lease cache proxier and set its underlying proxier to
-	// the API proxier.
-	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		BaseContext: ctx,
-		Proxier:     apiProxy,
-		Logger:      cacheLogger.Named("cache.leasecache"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a muxer and add paths relevant for the lease cache layer
-	mux := http.NewServeMux()
-	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
-
 	// Start listening to requests
 	cache.Run(ctx, &cache.Config{
 		Token:            client.Token(),
-		Proxier:          leaseCache,
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
-		Handler:          mux,
-		Logger:           cacheLogger.Named("cache.handler"),
+		Logger:           cacheLogger.Named("cache"),
 	})
 
 	// Clone a client to query from the agent's listener address

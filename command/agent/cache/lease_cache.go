@@ -253,7 +253,13 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	}
 
 	// Short-circuit if the secret is not renewable
-	if !secret.Renewable {
+	renewable, err := secret.TokenIsRenewable()
+	if err != nil {
+		c.logger.Error("failed to parse renewable param")
+		return
+	}
+	if !renewable {
+		c.logger.Debug("secret not renewable, skipping addtion to the renewer")
 		return
 	}
 

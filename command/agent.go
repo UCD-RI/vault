@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 
 	"os"
 	"sort"
@@ -350,36 +349,17 @@ func (c *AgentCommand) Run(args []string) int {
 		}
 	}
 
-	// Create the API proxier
-	apiProxy := cache.NewAPIProxy(&cache.APIProxyConfig{
-		Logger: c.logger.Named("cache.apiproxy"),
-	})
-
-	// Create the lease cache proxier and set its underlying proxier to
-	// the API proxier.
-	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		BaseContext: ctx,
-		Proxier:     apiProxy,
-		Logger:      c.logger.Named("cache.leasecache"),
-	})
-	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error creating new lease cache: %s", err))
-		return 1
-	}
-
-	// Create a muxer and add paths relevant for the lease cache layer
-	mux := http.NewServeMux()
-	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
-
 	// Start listening to requests
-	cache.Run(ctx, &cache.Config{
+	err = cache.Run(ctx, &cache.Config{
 		Token:            c.client.Token(),
-		Proxier:          leaseCache,
 		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
 		Listeners:        listeners,
-		Handler:          mux,
-		Logger:           c.logger.Named("cache.handler"),
+		Logger:           c.logger.Named("cache"),
 	})
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error starting the cache listeners: %v", err))
+		return 1
+	}
 
 	// Ensure that listeners are closed at all the exits
 	listenerCloseFunc := func() {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -23,15 +24,36 @@ type Config struct {
 	Proxier          Proxier
 	UseAutoAuthToken bool
 	Listeners        []net.Listener
-	Handler          *http.ServeMux
 	Logger           hclog.Logger
 }
 
-func Run(ctx context.Context, config *Config) {
-	config.Handler.Handle("/", handler(ctx, config))
+func Run(ctx context.Context, config *Config) error {
+	// Create the API proxier
+	apiProxy := NewAPIProxy(&APIProxyConfig{
+		Logger: config.Logger.Named("apiproxy"),
+	})
+
+	// Create the lease cache proxier and set its underlying proxier to
+	// the API proxier.
+	leaseCache, err := NewLeaseCache(&LeaseCacheConfig{
+		BaseContext: ctx,
+		Proxier:     apiProxy,
+		Logger:      config.Logger.Named("leasecache"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create lease cache: %v", err)
+	}
+
+	config.Proxier = leaseCache
+
+	// Create a muxer and add paths relevant for the lease cache layer
+	mux := http.NewServeMux()
+	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
+
+	mux.Handle("/", handler(ctx, config))
 	for _, ln := range config.Listeners {
 		server := &http.Server{
-			Handler:           config.Handler,
+			Handler:           mux,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			IdleTimeout:       5 * time.Minute,
@@ -39,6 +61,8 @@ func Run(ctx context.Context, config *Config) {
 		}
 		go server.Serve(ln)
 	}
+
+	return nil
 }
 
 func handler(ctx context.Context, config *Config) http.Handler {

@@ -1,10 +1,9 @@
-package agent
+package cache
 
 import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"testing"
 
@@ -14,7 +13,6 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/command/agent/cache"
 	"github.com/hashicorp/vault/helper/logging"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/vault"
@@ -55,34 +53,16 @@ func TestCache_nonCacheable(t *testing.T) {
 	}
 	defer listener.Close()
 
-	// Create the API proxier
-	apiProxy := cache.NewAPIProxy(&cache.APIProxyConfig{
-		Logger: cacheLogger.Named("cache.apiproxy"),
-	})
-
-	// Create the lease cache proxier and set its underlying proxier to
-	// the API proxier.
-	leaseCache, err := cache.NewLeaseCache(&cache.LeaseCacheConfig{
-		BaseContext: ctx,
-		Proxier:     apiProxy,
-		Logger:      cacheLogger.Named("cache.leasecache"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a muxer and add paths relevant for the lease cache layer
-	mux := http.NewServeMux()
-	mux.Handle("/v1/agent/cache-clear", leaseCache.HandleCacheClear(ctx))
-
 	// Start listening to requests
-	cache.Run(ctx, &cache.Config{
+	err = Run(ctx, &Config{
 		Token:            client.Token(),
-		Proxier:          leaseCache,
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
 		Logger:           cacheLogger.Named("cache"),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Clone a client to query from the agent's listener address
 	testClient, err := client.Clone()
@@ -158,12 +138,15 @@ func TestCache_AuthResponse(t *testing.T) {
 	defer listener.Close()
 
 	// Start listening to requests
-	cache.Run(ctx, &cache.Config{
+	err = Run(ctx, &Config{
 		Token:            client.Token(),
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
 		Logger:           cacheLogger.Named("cache"),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Clone a client to query from the agent's listener address
 	testClient, err := client.Clone()
@@ -271,12 +254,15 @@ func TestCache_LeaseResponse(t *testing.T) {
 	defer listener.Close()
 
 	// Start listening to requests
-	cache.Run(ctx, &cache.Config{
+	err = Run(ctx, &Config{
 		Token:            client.Token(),
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
 		Logger:           cacheLogger.Named("cache"),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Clone a client to query from the agent's listener address
 	testClient, err := client.Clone()

@@ -13,128 +13,10 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/api"
-	"github.com/hashicorp/vault/builtin/credential/userpass"
 	"github.com/hashicorp/vault/helper/logging"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/vault"
 )
-
-const policyAdmin = `
-path "*" {
-	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
-}
-`
-
-// testSetupClusterAndAgent is a helper func used to set up a test cluster and
-// caching agent. It returns a cleanup func that should be deferred immediately
-// along with two clients, one for direct cluster communication and another to
-// talk to the caching agent.
-func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *api.Client, *api.Client) {
-	t.Helper()
-
-	// Handle sane defaults
-	if coreConfig == nil {
-		coreConfig = &vault.CoreConfig{
-			DisableMlock: true,
-			DisableCache: true,
-			Logger:       hclog.NewNullLogger(),
-			CredentialBackends: map[string]logical.Factory{
-				"userpass": userpass.Factory,
-			},
-		}
-	}
-
-	if coreConfig.CredentialBackends == nil {
-		coreConfig.CredentialBackends = map[string]logical.Factory{
-			"userpass": userpass.Factory,
-		}
-	}
-
-	// Init new test cluster
-	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
-		HandlerFunc: vaulthttp.Handler,
-	})
-	cluster.Start()
-
-	cores := cluster.Cores
-	vault.TestWaitActive(t, cores[0].Core)
-
-	// clusterClient is the client that is used to talk directly to the cluster.
-	clusterClient := cores[0].Client
-
-	// Add an admin policy
-	if err := clusterClient.Sys().PutPolicy("admin", policyAdmin); err != nil {
-		t.Fatal(err)
-	}
-
-	// Set up the userpass auth backend and an admin user. Used for getting a token
-	// for the agent later down in this func.
-	clusterClient.Sys().EnableAuthWithOptions("userpass", &api.EnableAuthOptions{
-		Type: "userpass",
-	})
-
-	_, err := clusterClient.Logical().Write("auth/userpass/users/foo", map[string]interface{}{
-		"password": "bar",
-		"policies": []string{"admin"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Set up env vars for agent consumption
-	origEnvVaultAddress := os.Getenv(api.EnvVaultAddress)
-	os.Setenv(api.EnvVaultAddress, clusterClient.Address())
-
-	origEnvVaultCACert := os.Getenv(api.EnvVaultCACert)
-	os.Setenv(api.EnvVaultCACert, fmt.Sprintf("%s/ca_cert.pem", cluster.TempDir))
-
-	cacheLogger := logging.NewVaultLogger(hclog.Trace)
-	ctx := context.Background()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Start listening to requests
-	err = Run(ctx, &Config{
-		Token:            clusterClient.Token(),
-		UseAutoAuthToken: false,
-		Listeners:        []net.Listener{listener},
-		Logger:           cacheLogger.Named("cache"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// testClient is the client that is used to talk to the agent for proxying/caching behavior.
-	testClient, err := clusterClient.Clone()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := testClient.SetAddress("http://" + listener.Addr().String()); err != nil {
-		t.Fatal(err)
-	}
-
-	// Login via userpass method to derive a managed token. Set that token as the
-	// testClient's token
-	resp, err := testClient.Logical().Write("auth/userpass/login/foo", map[string]interface{}{
-		"password": "bar",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	testClient.SetToken(resp.Auth.ClientToken)
-
-	cleanup := func() {
-		cluster.Cleanup()
-		os.Setenv(api.EnvVaultAddress, origEnvVaultAddress)
-		os.Setenv(api.EnvVaultCACert, origEnvVaultCACert)
-		listener.Close()
-	}
-
-	return cleanup, clusterClient, testClient
-}
 
 func TestCache_nonCacheable(t *testing.T) {
 	coreConfig := &vault.CoreConfig{
@@ -146,8 +28,53 @@ func TestCache_nonCacheable(t *testing.T) {
 		},
 	}
 
-	cleanup, _, testClient := setupClusterAndAgent(t, coreConfig)
-	defer cleanup()
+	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
+		HandlerFunc: vaulthttp.Handler,
+	})
+	cluster.Start()
+	defer cluster.Cleanup()
+
+	cores := cluster.Cores
+	vault.TestWaitActive(t, cores[0].Core)
+	client := cores[0].Client
+
+	// Set up env vars for agent consumption
+	defer os.Setenv(api.EnvVaultAddress, os.Getenv(api.EnvVaultAddress))
+	os.Setenv(api.EnvVaultAddress, client.Address())
+
+	defer os.Setenv(api.EnvVaultCACert, os.Getenv(api.EnvVaultCACert))
+	os.Setenv(api.EnvVaultCACert, fmt.Sprintf("%s/ca_cert.pem", cluster.TempDir))
+
+	cacheLogger := logging.NewVaultLogger(hclog.Trace)
+	ctx := context.Background()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Start listening to requests
+	err = Run(ctx, &Config{
+		Token:            client.Token(),
+		UseAutoAuthToken: false,
+		Listeners:        []net.Listener{listener},
+		Logger:           cacheLogger.Named("cache"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Clone a client to query from the agent's listener address
+	testClient, err := client.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testClient.SetAddress("http://" + listener.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	testClient.SetToken(cluster.RootToken)
 
 	// Query mounts first
 	origMounts, err := testClient.Sys().ListMounts()
@@ -179,15 +106,59 @@ func TestCache_nonCacheable(t *testing.T) {
 }
 
 func TestCache_AuthResponse(t *testing.T) {
-	cleanup, _, testClient := setupClusterAndAgent(t, nil)
-	defer cleanup()
+	coreConfig := &vault.CoreConfig{
+		DisableMlock: true,
+		DisableCache: true,
+		Logger:       hclog.NewNullLogger(),
+	}
 
-	resp, err := testClient.Logical().Write("auth/token/create", nil)
+	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
+		HandlerFunc: vaulthttp.Handler,
+	})
+	cluster.Start()
+	defer cluster.Cleanup()
+
+	cores := cluster.Cores
+	vault.TestWaitActive(t, cores[0].Core)
+	client := cores[0].Client
+
+	// Set up env vars for agent consumption
+	defer os.Setenv(api.EnvVaultAddress, os.Getenv(api.EnvVaultAddress))
+	os.Setenv(api.EnvVaultAddress, client.Address())
+
+	defer os.Setenv(api.EnvVaultCACert, os.Getenv(api.EnvVaultCACert))
+	os.Setenv(api.EnvVaultCACert, fmt.Sprintf("%s/ca_cert.pem", cluster.TempDir))
+
+	cacheLogger := logging.NewVaultLogger(hclog.Trace)
+	ctx := context.Background()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := resp.Auth.ClientToken
-	testClient.SetToken(token)
+	defer listener.Close()
+
+	// Start listening to requests
+	err = Run(ctx, &Config{
+		Token:            client.Token(),
+		UseAutoAuthToken: false,
+		Listeners:        []net.Listener{listener},
+		Logger:           cacheLogger.Named("cache"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Clone a client to query from the agent's listener address
+	testClient, err := client.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testClient.SetAddress("http://" + listener.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	testClient.SetToken(cluster.RootToken)
 
 	// Test on auth response by creating a child token
 	{
@@ -250,8 +221,15 @@ func TestCache_LeaseResponse(t *testing.T) {
 		},
 	}
 
-	cleanup, client, testClient := setupClusterAndAgent(t, coreConfig)
-	defer cleanup()
+	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
+		HandlerFunc: vaulthttp.Handler,
+	})
+	cluster.Start()
+	defer cluster.Cleanup()
+
+	cores := cluster.Cores
+	vault.TestWaitActive(t, cores[0].Core)
+	client := cores[0].Client
 
 	err := client.Sys().Mount("kv", &api.MountInput{
 		Type: "kv",
@@ -259,6 +237,44 @@ func TestCache_LeaseResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Set up env vars for agent consumption
+	defer os.Setenv(api.EnvVaultAddress, os.Getenv(api.EnvVaultAddress))
+	os.Setenv(api.EnvVaultAddress, client.Address())
+
+	defer os.Setenv(api.EnvVaultCACert, os.Getenv(api.EnvVaultCACert))
+	os.Setenv(api.EnvVaultCACert, fmt.Sprintf("%s/ca_cert.pem", cluster.TempDir))
+
+	cacheLogger := logging.NewVaultLogger(hclog.Trace)
+	ctx := context.Background()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Start listening to requests
+	err = Run(ctx, &Config{
+		Token:            client.Token(),
+		UseAutoAuthToken: false,
+		Listeners:        []net.Listener{listener},
+		Logger:           cacheLogger.Named("cache"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Clone a client to query from the agent's listener address
+	testClient, err := client.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testClient.SetAddress("http://" + listener.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	testClient.SetToken(cluster.RootToken)
 
 	// Test proxy by issuing two different requests
 	{

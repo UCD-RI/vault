@@ -707,12 +707,13 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 // Case 4: ns1/ /v1/foo/bar -> ns1/, /v1/foo/bar
 func deriveNamespaceAndRevocationPath(req *SendRequest) (string, string) {
 	revocationPaths := []string{
-		"/v1/auth/token/revoke-self",
-		"/v1/auth/token/revoke-accessor",
-		"/v1/auth/token/revoke-orphan",
-		"/v1/sys/leases/revoke",
-		"/v1/sys/leases/revoke-force",
-		"/v1/sys/leases/revoke-prefix",
+		vaultPathTokenRevoke,
+		vaultPathTokenRevokeSelf,
+		vaultPathTokenRevokeAccessor,
+		vaultPathTokenRevokeOrphan,
+		vaultPathLeaseRevoke,
+		vaultPathLeaseRevokeForce,
+		vaultPathLeaseRevokePrefix,
 	}
 
 	return deriveNamespaceAndRelativePath(req.Request, revocationPaths)

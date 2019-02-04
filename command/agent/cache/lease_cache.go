@@ -22,6 +22,7 @@ import (
 	cachememdb "github.com/hashicorp/vault/command/agent/cache/cachememdb"
 	"github.com/hashicorp/vault/helper/contextutil"
 	"github.com/hashicorp/vault/helper/jsonutil"
+	nshelper "github.com/hashicorp/vault/helper/namespace"
 )
 
 type contextIndex struct{}
@@ -37,7 +38,6 @@ const (
 	vaultPathTokenRevokeSelf     = "/v1/auth/token/revoke-self"
 	vaultPathTokenRevokeAccessor = "/v1/auth/token/revoke-accessor"
 	vaultPathTokenRevokeOrphan   = "/v1/auth/token/revoke-orphan"
-	vaultPathTokenLookupSelf     = "/v1/auth/token/lookup-self"
 	vaultPathLeaseRevoke         = "/v1/sys/leases/revoke"
 	vaultPathLeaseRevokeForce    = "/v1/sys/leases/revoke-force"
 	vaultPathLeaseRevokePrefix   = "/v1/sys/leases/revoke-prefix"
@@ -172,9 +172,21 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return nil, err
 	}
 
-	if err := c.processResponse(ctx, index, req, resp, secret); err != nil {
+	isRevocation, err := c.handleRevocationRequest(ctx, req, resp)
+	if err != nil {
 		c.logger.Error("failed to process the response", "error", err)
 		return nil, err
+	}
+
+	// If this is a revocation request, do not go through cache logic.
+	if isRevocation {
+		return resp, nil
+	}
+
+	// If the response is a token creation response and if the token created is
+	// not an orphan, then set the TokenParent in the cached index.
+	if strings.HasPrefix(req.Request.URL.Path, vaultPathTokenCreate) && resp.Response.StatusCode == http.StatusOK && !secret.Auth.Orphan {
+		index.TokenParent = req.Token
 	}
 
 	renewCtxInfo := c.ctxInfo(nil, req.Token)
@@ -542,80 +554,71 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 	return nil
 }
 
-func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Index, req *SendRequest, resp *SendResponse, secret *api.Secret) error {
-	path := req.Request.URL.Path
-
-	// If the response is a token creation response and if the token created is
-	// not an orphan, then set the TokenParent in the cached index.
-	if strings.HasPrefix(path, vaultPathTokenCreate) && resp.Response.StatusCode == http.StatusOK && !secret.Auth.Orphan {
-		index.TokenParent = req.Token
-	}
-
-	//
-	// Check whether the originating request is a revocation request, and if so
-	// perform applicable cache cleanups.
-	//
-
+// handleRevocationRequest checks whether the originating request is a
+// revocation request, and if so perform applicable cache cleanups.
+// Returns true is this is a revocation request.
+func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendRequest, resp *SendResponse) (bool, error) {
 	// Lease and token revocations return 204's on success. Fast-path if that's
 	// not the case.
 	if resp.Response.StatusCode != http.StatusNoContent {
-		return nil
+		return false, nil
 	}
 
-	// TODO: Handle namespaces
+	namespace, path := deriveNamespaceAndRevocationPath(req)
+
 	switch {
 	case path == vaultPathTokenRevoke:
 		// Get the token from the request body
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return err
+			return true, err
 		}
 		token, ok := jsonBody["token"]
 		if !ok {
-			return fmt.Errorf("failed to get token from request body")
+			return false, fmt.Errorf("failed to get token from request body")
 		}
 
 		// Clear the cache entry associated with the token and all the other
 		// entries belonging to the leases derived from this token.
 		if err := c.handleCacheClear(ctx, "token", token.(string)); err != nil {
-			return err
+			return true, err
 		}
 
 	case path == vaultPathTokenRevokeSelf:
 		// Clear the cache entry associated with the token and all the other
 		// entries belonging to the leases derived from this token.
 		if err := c.handleCacheClear(ctx, "token", req.Token); err != nil {
-			return err
+			return true, err
 		}
 
 	case path == vaultPathTokenRevokeAccessor:
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return err
+			return true, err
 		}
 		accessor, ok := jsonBody["accessor"]
 		if !ok {
-			return fmt.Errorf("failed to get accessor from request body")
+			return false, fmt.Errorf("failed to get accessor from request body")
 		}
 
 		if err := c.handleCacheClear(ctx, "token_accessor", accessor.(string)); err != nil {
-			return err
+			return true, err
 		}
 
 	case path == vaultPathTokenRevokeOrphan:
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return err
+			return true, err
 		}
 		token, ok := jsonBody["token"]
 		if !ok {
-			return fmt.Errorf("failed to get token from request body")
+			return false, fmt.Errorf("failed to get token from request body")
 		}
 
 		// Find out all the indexes that are directly tied to the revoked token
 		indexes, err := c.db.GetByPrefix(cachememdb.IndexNameToken.String(), token.(string))
 		if err != nil {
-			return err
+			return true, err
 		}
 
 		// Out of these indexes, one will be for the token itself and the rest
@@ -635,14 +638,14 @@ func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Inde
 		// Clear the parent references of the revoked token
 		indexes, err = c.db.GetByPrefix(cachememdb.IndexNameTokenParent.String(), token.(string))
 		if err != nil {
-			return err
+			return true, err
 		}
 		for _, index := range indexes {
 			index.TokenParent = ""
 			err = c.db.Set(index)
 			if err != nil {
 				c.logger.Error("failed to persist index", "error", err)
-				return err
+				return true, err
 			}
 		}
 
@@ -651,14 +654,14 @@ func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Inde
 		// Get the lease from the request body
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return err
+			return true, err
 		}
 		leaseID, ok := jsonBody["lease_id"]
 		if !ok {
-			return fmt.Errorf("failed to get lease_id from request body")
+			return false, fmt.Errorf("failed to get lease_id from request body")
 		}
 		if err := c.handleCacheClear(ctx, "lease", leaseID.(string)); err != nil {
-			return err
+			return true, err
 		}
 
 	case strings.HasPrefix(path, vaultPathLeaseRevokeForce):
@@ -666,9 +669,9 @@ func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Inde
 		prefix := strings.TrimPrefix(path, vaultPathLeaseRevokeForce)
 		// Get all the cache indexes that use the request path containing the
 		// prefix and cancel the renewer context of each.
-		indexes, err := c.db.GetByPrefix("request_path", "/v1"+prefix)
+		indexes, err := c.db.GetByPrefix("request_path", namespace, "/v1"+prefix)
 		if err != nil {
-			return err
+			return true, err
 		}
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
@@ -679,18 +682,91 @@ func (c *LeaseCache) processResponse(ctx context.Context, index *cachememdb.Inde
 		prefix := strings.TrimPrefix(path, vaultPathLeaseRevokePrefix)
 		// Get all the cache indexes that use the request path containing the
 		// prefix and cancel the renewer context of each.
-		indexes, err := c.db.GetByPrefix("request_path", "/v1"+prefix)
+		indexes, err := c.db.GetByPrefix("request_path", namespace, "/v1"+prefix)
 		if err != nil {
-			return err
+			return true, err
 		}
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
 		}
 	default:
-		return nil
+		return false, nil
 	}
 
 	c.logger.Debug("triggered caching eviction from revocation request")
 
-	return nil
+	return true, nil
+}
+
+// deriveNamespaceAndPath returns the namespace and relative path for revocation paths.
+// All other paths will be returned as-is.
+//
+// Case 1: /v1/ns1/leases/revoke  -> ns1/, /v1/leases/revoke
+// Case 2: ns1/ /v1/leases/revoke -> ns1/, /v1/leases/revoke
+// Case 3: /v1/ns1/foo/bar  -> root/, /v1/ns1/foo/bar
+// Case 4: ns1/ /v1/foo/bar -> ns1/, /v1/foo/bar
+func deriveNamespaceAndRevocationPath(req *SendRequest) (string, string) {
+	revocationPaths := []string{
+		"/v1/auth/token/revoke-self",
+		"/v1/auth/token/revoke-accessor",
+		"/v1/auth/token/revoke-orphan",
+		"/v1/sys/leases/revoke",
+		"/v1/sys/leases/revoke-force",
+		"/v1/sys/leases/revoke-prefix",
+	}
+
+	return deriveNamespaceAndRelativePath(req.Request, revocationPaths)
+}
+
+// deriveNamespaceAndRelativePath returns the namespace and relative path if its a substring
+// of the provided paths to check.
+//
+// If the path contains a namespace, but it's not part of the provided paths to check,
+// it will be returned as-is, since there's no way to tell where the namespace
+// ends and where the request path begins purely based off a string.
+func deriveNamespaceAndRelativePath(req *http.Request, paths []string) (string, string) {
+	// Strip /v1 for namespace prefix checking down the road
+	var strippedPaths []string
+	for _, p := range paths {
+		strippedPaths = append(strippedPaths, strings.TrimPrefix(p, "/v1"))
+	}
+
+	namespace := "root/"
+	nsHeader := req.Header.Get("X-Vault-Namespace")
+	if nsHeader != "" {
+		namespace = nsHeader
+	}
+
+	fullPath := req.URL.Path
+	nonVersionedPath := strings.TrimPrefix(fullPath, "/v1")
+
+	for _, pathToCheck := range strippedPaths {
+		// We use strings.Contains here for paths that can contain
+		// vars in the path, e.g. /v1/lease/revoke-prefix/:prefix
+		i := strings.Index(nonVersionedPath, pathToCheck)
+		// If there's no match, move on to the next check
+		if i == -1 {
+			continue
+		}
+
+		// If the index is 0, this is a relative path with no namespace preppended,
+		// so we can break early
+		if i == 0 {
+			break
+		}
+
+		// We need to turn /ns1 into ns1/, this makes it easy
+		namespaceInPath := nshelper.Canonicalize(nonVersionedPath[:i])
+
+		// If it's root, we replace, otherwise we join
+		if namespace == "root/" {
+			namespace = namespaceInPath
+		} else {
+			namespace = namespace + namespaceInPath
+		}
+
+		return namespace, fmt.Sprintf("/v1%s", nonVersionedPath[i:])
+	}
+
+	return namespace, fmt.Sprintf("/v1%s", nonVersionedPath)
 }

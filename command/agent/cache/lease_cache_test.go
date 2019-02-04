@@ -6,13 +6,14 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/go-test/deep"
-
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/helper/consts"
 )
 
 func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
@@ -228,6 +229,153 @@ func TestLeaseCache_HandleCacheClear(t *testing.T) {
 			}
 			if tc.expectedStatusCode != resp.StatusCode {
 				t.Fatalf("status code mismatch: expected = %v, got = %v", tc.expectedStatusCode, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func Test_deriveNamespaceAndRevocationPath(t *testing.T) {
+	tests := []struct {
+		name             string
+		req              *SendRequest
+		wantNamespace    string
+		wantRelativePath string
+	}{
+		{
+			"non_revocation_full_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns1/sys/mounts",
+					},
+				},
+			},
+			"root/",
+			"/v1/ns1/sys/mounts",
+		},
+		{
+			"non_revocation_relative_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/sys/mounts",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/",
+			"/v1/sys/mounts",
+		},
+		{
+			"non_revocation_relative_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns2/sys/mounts",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/",
+			"/v1/ns2/sys/mounts",
+		},
+		{
+			"revocation_full_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns1/sys/leases/revoke",
+					},
+				},
+			},
+			"ns1/",
+			"/v1/sys/leases/revoke",
+		},
+		{
+			"revocation_relative_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/sys/leases/revoke",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/",
+			"/v1/sys/leases/revoke",
+		},
+		{
+			"revocation_relative_partial_ns",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns2/sys/leases/revoke",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/ns2/",
+			"/v1/sys/leases/revoke",
+		},
+		{
+			"revocation_prefix_full_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns1/sys/leases/revoke-prefix/foo",
+					},
+				},
+			},
+			"ns1/",
+			"/v1/sys/leases/revoke-prefix/foo",
+		},
+		{
+			"revocation_prefix_relative_path",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/sys/leases/revoke-prefix/foo",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/",
+			"/v1/sys/leases/revoke-prefix/foo",
+		},
+		{
+			"revocation_prefix_partial_ns",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "/v1/ns2/sys/leases/revoke-prefix/foo",
+					},
+					Header: http.Header{
+						consts.NamespaceHeaderName: []string{"ns1/"},
+					},
+				},
+			},
+			"ns1/ns2/",
+			"/v1/sys/leases/revoke-prefix/foo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotNamespace, gotRelativePath := deriveNamespaceAndRevocationPath(tt.req)
+			if gotNamespace != tt.wantNamespace {
+				t.Errorf("deriveNamespaceAndRevocationPath() gotNamespace = %v, want %v", gotNamespace, tt.wantNamespace)
+			}
+			if gotRelativePath != tt.wantRelativePath {
+				t.Errorf("deriveNamespaceAndRevocationPath() gotRelativePath = %v, want %v", gotRelativePath, tt.wantRelativePath)
 			}
 		})
 	}

@@ -728,35 +728,28 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 	return true, nil
 }
 
-// deriveNamespaceAndPath returns the namespace and relative path for revocation paths.
-// All other paths will be returned as-is.
+// deriveNamespaceAndRevocationPath returns the namespace and relative path for
+// revocation paths.
+//
+// If the path contains a namespace, but it's not a revocation path, it will be
+// returned as-is, since there's no way to tell where the namespace ends and
+// where the request path begins purely based off a string.
 //
 // Case 1: /v1/ns1/leases/revoke  -> ns1/, /v1/leases/revoke
 // Case 2: ns1/ /v1/leases/revoke -> ns1/, /v1/leases/revoke
 // Case 3: /v1/ns1/foo/bar  -> root/, /v1/ns1/foo/bar
 // Case 4: ns1/ /v1/foo/bar -> ns1/, /v1/foo/bar
 func deriveNamespaceAndRevocationPath(req *SendRequest) (string, string) {
-	return deriveNamespaceAndRelativePath(req.Request, revocationPaths)
-}
-
-// deriveNamespaceAndRelativePath returns the namespace and relative path if its
-// a substring of the provided paths to check. The provided paths needs to have
-// the version prefix stripped.
-//
-// If the path contains a namespace, but it's not part of the provided paths to
-// check, it will be returned as-is, since there's no way to tell where the
-// namespace ends and where the request path begins purely based off a string.
-func deriveNamespaceAndRelativePath(req *http.Request, paths []string) (string, string) {
 	namespace := "root/"
-	nsHeader := req.Header.Get(consts.NamespaceHeaderName)
+	nsHeader := req.Request.Header.Get(consts.NamespaceHeaderName)
 	if nsHeader != "" {
 		namespace = nsHeader
 	}
 
-	fullPath := req.URL.Path
+	fullPath := req.Request.URL.Path
 	nonVersionedPath := strings.TrimPrefix(fullPath, "/v1")
 
-	for _, pathToCheck := range paths {
+	for _, pathToCheck := range revocationPaths {
 		// We use strings.Contains here for paths that can contain
 		// vars in the path, e.g. /v1/lease/revoke-prefix/:prefix
 		i := strings.Index(nonVersionedPath, pathToCheck)

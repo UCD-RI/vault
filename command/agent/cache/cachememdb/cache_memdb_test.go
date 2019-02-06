@@ -2,7 +2,6 @@ package cachememdb
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/go-test/deep"
@@ -48,6 +47,7 @@ func TestCacheMemDB_Get(t *testing.T) {
 	// Populate cache
 	in := &Index{
 		ID:            "test_id",
+		Namespace:     "test_ns/",
 		RequestPath:   "/v1/request/path",
 		Token:         "test_token",
 		TokenAccessor: "test_accessor",
@@ -60,40 +60,40 @@ func TestCacheMemDB_Get(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name   string
-		iName  string
-		iValue string
+		name        string
+		indexName   string
+		indexValues []interface{}
 	}{
 		{
 			"by_index_id",
 			"id",
-			in.ID,
+			[]interface{}{in.ID},
 		},
 		{
 			"by_request_path",
 			"request_path",
-			in.RequestPath,
+			[]interface{}{in.Namespace, in.RequestPath},
 		},
 		{
 			"by_lease",
 			"lease",
-			in.Lease,
+			[]interface{}{in.Lease},
 		},
 		{
 			"by_token",
 			"token",
-			in.Token,
+			[]interface{}{in.Token},
 		},
 		{
 			"by_token_accessor",
 			"token_accessor",
-			in.TokenAccessor,
+			[]interface{}{in.TokenAccessor},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := cache.Get(tc.iName, tc.iValue)
+			out, err := cache.Get(tc.indexName, tc.indexValues...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,6 +136,7 @@ func TestCacheMemDB_Set(t *testing.T) {
 			"all_fields",
 			&Index{
 				ID:            "test_id",
+				Namespace:     "test_ns/",
 				RequestPath:   "/v1/request/path",
 				Token:         "test_token",
 				TokenAccessor: "test_accessor",
@@ -168,6 +169,7 @@ func TestCacheMemDB_Evict(t *testing.T) {
 
 	testIndex := &Index{
 		ID:            "test_id",
+		Namespace:     "test_ns/",
 		RequestPath:   "/v1/request/path",
 		Token:         "test_token",
 		TokenAccessor: "test_token_accessor",
@@ -178,56 +180,56 @@ func TestCacheMemDB_Evict(t *testing.T) {
 	testCases := []struct {
 		name        string
 		indexName   string
-		indexValue  string
+		indexValues []interface{}
 		insertIndex *Index
 		wantErr     bool
 	}{
 		{
 			"empty_params",
 			"",
-			"",
+			[]interface{}{""},
 			nil,
 			true,
 		},
 		{
 			"invalid_params",
 			"foo",
-			"bar",
+			[]interface{}{"bar"},
 			nil,
 			true,
 		},
 		{
 			"by_id",
 			"id",
-			"test_id",
+			[]interface{}{"test_id"},
 			testIndex,
 			false,
 		},
 		{
 			"by_request_path",
 			"request_path",
-			"/v1/request/path",
+			[]interface{}{"test_ns/", "/v1/request/path"},
 			testIndex,
 			false,
 		},
 		{
 			"by_token",
 			"token",
-			"test_token",
+			[]interface{}{"test_token"},
 			testIndex,
 			false,
 		},
 		{
 			"by_token_accessor",
 			"token_accessor",
-			"test_accessor",
+			[]interface{}{"test_accessor"},
 			testIndex,
 			false,
 		},
 		{
 			"by_lease",
 			"lease",
-			"test_lease",
+			[]interface{}{"test_lease"},
 			testIndex,
 			false,
 		},
@@ -241,266 +243,8 @@ func TestCacheMemDB_Evict(t *testing.T) {
 				}
 			}
 
-			if err := cache.Evict(tc.indexName, tc.indexValue); (err != nil) != tc.wantErr {
+			if err := cache.Evict(tc.indexName, tc.indexValues...); (err != nil) != tc.wantErr {
 				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestCacheMemDB_EvictAll(t *testing.T) {
-	cache, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Test on empty cache
-	if err := cache.EvictAll(IndexNameID.String(), "foo"); err != nil {
-		t.Fatal(err)
-	}
-
-	// The following set inserts indexes using the same token for
-	// multi-eviction
-	testTokenIndexes := []*Index{
-		&Index{
-			ID:           "test_id_1",
-			Token:        "test_token",
-			Lease:        "test_lease_1",
-			RequestPath:  "/v1/request/path/1",
-			RenewCtxInfo: testContextInfo(),
-		},
-		&Index{
-			ID:           "test_id_2",
-			Token:        "test_token",
-			Lease:        "test_lease_2",
-			RequestPath:  "/v1/request/path/2",
-			RenewCtxInfo: testContextInfo(),
-		},
-	}
-
-	// The following set inserts indexes using the same token accessor for
-	// multi-eviction
-	testTokenAccessorIndexes := []*Index{
-		&Index{
-			ID:            "test_id_1",
-			Token:         "test_token",
-			TokenAccessor: "test_token_accessor",
-			Lease:         "test_lease_1",
-			RequestPath:   "/v1/request/path/1",
-			RenewCtxInfo:  testContextInfo(),
-		},
-		&Index{
-			ID:            "test_id_2",
-			Token:         "test_token",
-			TokenAccessor: "test_token_accessor",
-			Lease:         "test_lease_2",
-			RequestPath:   "/v1/request/path/2",
-			RenewCtxInfo:  testContextInfo(),
-		},
-	}
-
-	// The following set inserts indexes using the same requestpath for
-	// multi-eviction
-	testReqPathIndexes := []*Index{
-		&Index{
-			ID:           "test_id_1",
-			Token:        "test_token_1",
-			Lease:        "test_lease_1",
-			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testContextInfo(),
-		},
-		&Index{
-			ID:           "test_id_2",
-			Token:        "test_token_2",
-			Lease:        "test_lease_2",
-			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testContextInfo(),
-		},
-	}
-
-	testCases := []struct {
-		name        string
-		indexName   string
-		indexValue  string
-		insertIndex []*Index
-		wantErr     bool
-	}{
-		{
-			"empty_params",
-			"",
-			"",
-			nil,
-			true,
-		},
-		{
-			"invalid_params",
-			"foo",
-			"bar",
-			nil,
-			true,
-		},
-		{
-			"by_token",
-			"token",
-			"test_token",
-			testTokenIndexes,
-			false,
-		},
-		{
-			"by_token_accessor",
-			"token_accessor",
-			"test_token_accessor",
-			testTokenAccessorIndexes,
-			false,
-		},
-		{
-			"by_request_path",
-			"request_path",
-			"/v1/request/path",
-			testReqPathIndexes,
-			false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.insertIndex != nil {
-				for _, index := range tc.insertIndex {
-					if err := cache.Set(index); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if err := cache.EvictAll(tc.indexName, tc.indexValue); (err != nil) != tc.wantErr {
-				t.Fatal(err)
-			}
-			if tc.wantErr {
-				return
-			}
-
-			// Check that indexes are no longer in the cache
-			index, err := cache.Get(tc.indexName, tc.indexValue)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if index != nil {
-				t.Fatalf("expected nil index after eviction, got = %v", index)
-			}
-		})
-	}
-}
-
-func TestCacheMemDB_EvictByPrefix(t *testing.T) {
-	cache, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Test on empty cache
-	if err := cache.EvictAll(IndexNameID.String(), "foo"); err != nil {
-		t.Fatal(err)
-	}
-
-	testLeaseIndexes := []*Index{
-		&Index{
-			ID:           "test_id_1",
-			Token:        "test_token_1",
-			Lease:        "baz/1",
-			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testContextInfo(),
-		},
-		&Index{
-			ID:           "test_id_2",
-			Token:        "test_token_2",
-			Lease:        "baz/2",
-			RequestPath:  "/v1/request/path",
-			RenewCtxInfo: testContextInfo(),
-		},
-	}
-
-	testReqPathIndexes := []*Index{
-		&Index{
-			ID:           "test_id_1",
-			Token:        "test_token_1",
-			Lease:        "test_lease_1",
-			RequestPath:  "/v1/request/path/1",
-			RenewCtxInfo: testContextInfo(),
-		},
-		&Index{
-			ID:           "test_id_2",
-			Token:        "test_token_2",
-			Lease:        "test_lease_2",
-			RequestPath:  "/v1/request/path/2",
-			RenewCtxInfo: testContextInfo(),
-		},
-	}
-
-	testCases := []struct {
-		name        string
-		indexName   string
-		indexValue  string
-		insertIndex []*Index
-		wantErr     bool
-	}{
-		{
-			"empty_params",
-			"",
-			"",
-			nil,
-			true,
-		},
-		{
-			"invalid_params",
-			"foo",
-			"bar",
-			nil,
-			true,
-		},
-		{
-			"by_lease",
-			"lease",
-			"baz",
-			testLeaseIndexes,
-			false,
-		},
-		{
-			"by_request_path",
-			"request_path",
-			"/v1/request/path",
-			testReqPathIndexes,
-			false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.insertIndex != nil {
-				for _, index := range tc.insertIndex {
-					if err := cache.Set(index); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if err := cache.EvictByPrefix(tc.indexName, tc.indexValue); (err != nil) != tc.wantErr {
-				t.Fatal(err)
-			}
-			if tc.wantErr {
-				return
-			}
-
-			// Check that indexes are no longer in the cache
-			foundIndexes := []*Index{}
-			for i := range tc.insertIndex {
-				out, err := cache.Get(IndexNameID.String(), fmt.Sprintf("key%d", i+1))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if out != nil {
-					foundIndexes = append(foundIndexes, out)
-				}
-			}
-			if len(foundIndexes) != 0 {
-				t.Fatalf("expected 0 matching indexes, got = %#v", foundIndexes)
 			}
 		})
 	}
@@ -517,6 +261,7 @@ func TestCacheMemDB_Flush(t *testing.T) {
 		ID:          "test_id",
 		Token:       "test_token",
 		Lease:       "test_lease",
+		Namespace:   "test_ns/",
 		RequestPath: "/v1/request/path",
 		Response:    []byte("hello world"),
 	}

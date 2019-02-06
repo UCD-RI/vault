@@ -130,6 +130,7 @@ func (c *CacheMemDB) GetByPrefix(indexName string, indexValues ...interface{}) (
 	return indexes, nil
 }
 
+// Get returns the index based on the indexer and the index values provided.
 func (c *CacheMemDB) Get(indexName string, indexValues ...interface{}) (*Index, error) {
 	if indexNameFromString(indexName) == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", indexName)

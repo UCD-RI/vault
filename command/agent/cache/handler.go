@@ -67,7 +67,7 @@ func Run(ctx context.Context, config *Config) error {
 
 func handler(ctx context.Context, config *Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		config.Logger.Info("received request", "path", r.RequestURI)
+		config.Logger.Info("received request", "path", r.URL.Path)
 
 		token := r.Header.Get(consts.AuthHeaderName)
 		if token == "" && config.UseAutoAuthToken {

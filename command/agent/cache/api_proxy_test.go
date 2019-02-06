@@ -1,8 +1,6 @@
 package cache
 
 import (
-	"fmt"
-	"os"
 	"testing"
 
 	hclog "github.com/hashicorp/go-hclog"
@@ -10,33 +8,11 @@ import (
 	"github.com/hashicorp/vault/helper/jsonutil"
 	"github.com/hashicorp/vault/helper/logging"
 	"github.com/hashicorp/vault/helper/namespace"
-	vaulthttp "github.com/hashicorp/vault/http"
-	"github.com/hashicorp/vault/vault"
 )
 
 func TestCache_APIProxy(t *testing.T) {
-	coreConfig := &vault.CoreConfig{
-		DisableMlock: true,
-		DisableCache: true,
-		Logger:       hclog.NewNullLogger(),
-	}
-
-	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
-		HandlerFunc: vaulthttp.Handler,
-	})
-	cluster.Start()
-	defer cluster.Cleanup()
-
-	cores := cluster.Cores
-	vault.TestWaitActive(t, cores[0].Core)
-
-	client := cores[0].Client
-
-	defer os.Setenv(api.EnvVaultAddress, os.Getenv(api.EnvVaultAddress))
-	os.Setenv(api.EnvVaultAddress, client.Address())
-
-	defer os.Setenv(api.EnvVaultCACert, os.Getenv(api.EnvVaultCACert))
-	os.Setenv(api.EnvVaultCACert, fmt.Sprintf("%s/ca_cert.pem", cluster.TempDir))
+	cleanup, client, _ := setupClusterAndAgent(t, nil)
+	defer cleanup()
 
 	proxier := NewAPIProxy(&APIProxyConfig{
 		Logger: logging.NewVaultLogger(hclog.Trace),

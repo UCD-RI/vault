@@ -205,7 +205,7 @@ func (c *CacheMemDB) EvictByPrefix(indexName, indexPrefix string) error {
 
 func (c *CacheMemDB) batchEvict(isPrefix bool, indexName string, indexValues ...interface{}) error {
 	if indexNameFromString(indexName) == IndexNameInvalid {
-		return nil, fmt.Errorf("invalid index name %q", indexName)
+		return fmt.Errorf("invalid index name %q", indexName)
 	}
 
 	if isPrefix {

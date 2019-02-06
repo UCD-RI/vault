@@ -26,13 +26,6 @@ import (
 	nshelper "github.com/hashicorp/vault/helper/namespace"
 )
 
-type contextIndex struct{}
-
-var (
-	contextIndexID = contextIndex{}
-	errInvalidType = errors.New("invalid type provided")
-)
-
 const (
 	vaultPathTokenCreate         = "/v1/auth/token/create"
 	vaultPathTokenRevoke         = "/v1/auth/token/revoke"
@@ -43,6 +36,22 @@ const (
 	vaultPathLeaseRevokeForce    = "/v1/sys/leases/revoke-force"
 	vaultPathLeaseRevokePrefix   = "/v1/sys/leases/revoke-prefix"
 )
+
+var (
+	contextIndexID  = contextIndex{}
+	errInvalidType  = errors.New("invalid type provided")
+	revocationPaths = []string{
+		strings.TrimPrefix(vaultPathTokenRevoke, "/v1"),
+		strings.TrimPrefix(vaultPathTokenRevokeSelf, "/v1"),
+		strings.TrimPrefix(vaultPathTokenRevokeAccessor, "/v1"),
+		strings.TrimPrefix(vaultPathTokenRevokeOrphan, "/v1"),
+		strings.TrimPrefix(vaultPathLeaseRevoke, "/v1"),
+		strings.TrimPrefix(vaultPathLeaseRevokeForce, "/v1"),
+		strings.TrimPrefix(vaultPathLeaseRevokePrefix, "/v1"),
+	}
+)
+
+type contextIndex struct{}
 
 type cacheClearRequest struct {
 	Type      string `json:"type"`
@@ -727,32 +736,17 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 // Case 3: /v1/ns1/foo/bar  -> root/, /v1/ns1/foo/bar
 // Case 4: ns1/ /v1/foo/bar -> ns1/, /v1/foo/bar
 func deriveNamespaceAndRevocationPath(req *SendRequest) (string, string) {
-	revocationPaths := []string{
-		vaultPathTokenRevoke,
-		vaultPathTokenRevokeSelf,
-		vaultPathTokenRevokeAccessor,
-		vaultPathTokenRevokeOrphan,
-		vaultPathLeaseRevoke,
-		vaultPathLeaseRevokeForce,
-		vaultPathLeaseRevokePrefix,
-	}
-
 	return deriveNamespaceAndRelativePath(req.Request, revocationPaths)
 }
 
-// deriveNamespaceAndRelativePath returns the namespace and relative path if its a substring
-// of the provided paths to check.
+// deriveNamespaceAndRelativePath returns the namespace and relative path if its
+// a substring of the provided paths to check. The provided paths needs to have
+// the version prefix stripped.
 //
-// If the path contains a namespace, but it's not part of the provided paths to check,
-// it will be returned as-is, since there's no way to tell where the namespace
-// ends and where the request path begins purely based off a string.
+// If the path contains a namespace, but it's not part of the provided paths to
+// check, it will be returned as-is, since there's no way to tell where the
+// namespace ends and where the request path begins purely based off a string.
 func deriveNamespaceAndRelativePath(req *http.Request, paths []string) (string, string) {
-	// Strip /v1 for namespace prefix checking down the road
-	var strippedPaths []string
-	for _, p := range paths {
-		strippedPaths = append(strippedPaths, strings.TrimPrefix(p, "/v1"))
-	}
-
 	namespace := "root/"
 	nsHeader := req.Header.Get(consts.NamespaceHeaderName)
 	if nsHeader != "" {
@@ -762,7 +756,7 @@ func deriveNamespaceAndRelativePath(req *http.Request, paths []string) (string, 
 	fullPath := req.URL.Path
 	nonVersionedPath := strings.TrimPrefix(fullPath, "/v1")
 
-	for _, pathToCheck := range strippedPaths {
+	for _, pathToCheck := range paths {
 		// We use strings.Contains here for paths that can contain
 		// vars in the path, e.g. /v1/lease/revoke-prefix/:prefix
 		i := strings.Index(nonVersionedPath, pathToCheck)

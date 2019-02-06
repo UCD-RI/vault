@@ -183,32 +183,50 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return resp, nil
 	}
 
-	// If the response is a token creation response and if the token created is
-	// not an orphan, then set the TokenParent in the cached index.
-	if strings.HasPrefix(req.Request.URL.Path, vaultPathTokenCreate) && resp.Response.StatusCode == http.StatusOK && !secret.Auth.Orphan {
-		index.TokenParent = req.Token
-	}
-
-	renewCtxInfo := c.ctxInfo(nil, req.Token)
+	var renewCtxInfo *ContextInfo
 	switch {
 	case secret == nil:
 		// Fast path for non-cacheable responses
 		return resp, nil
 	case secret.LeaseID != "":
+		renewCtxInfo = c.tokenContexts[req.Token]
+		// If the lease belongs to a token that is not managed by the agent,
+		// return the response without caching it.
+		if renewCtxInfo == nil {
+			return resp, nil
+		}
+
+		// Derive a context for renewal using the token's context
 		newCtxInfo := new(ContextInfo)
 		newCtxInfo.Ctx, newCtxInfo.CancelFunc = context.WithCancel(renewCtxInfo.Ctx)
+		newCtxInfo.DoneCh = make(chan struct{})
 		renewCtxInfo = newCtxInfo
 
 		index.Lease = secret.LeaseID
 		index.Token = req.Token
+
 	case secret.Auth != nil:
+		isNonOrphanNewToken := strings.HasPrefix(req.Request.URL.Path, vaultPathTokenCreate) && resp.Response.StatusCode == http.StatusOK && !secret.Auth.Orphan
+
+		// If the new token is a result of token creation endpoints (not from
+		// login endpoints), and if its a non-orphan, then the new token's
+		// context should be derived from the context of the parent token.
+		var parentCtx context.Context
+		if isNonOrphanNewToken {
+			parentCtxInfo := c.tokenContexts[req.Token]
+			// If parent token is not managed by the agent, child shouldn't be
+			// either.
+			if parentCtxInfo == nil {
+				return resp, nil
+			}
+			parentCtx = parentCtxInfo.Ctx
+			index.TokenParent = req.Token
+		}
+
+		renewCtxInfo = c.createCtxInfo(parentCtx, secret.Auth.ClientToken)
 		index.Token = secret.Auth.ClientToken
 		index.TokenAccessor = secret.Auth.Accessor
-		var parentCtx context.Context
-		if index.TokenParent == req.Token {
-			parentCtx = renewCtxInfo.Ctx
-		}
-		renewCtxInfo = c.ctxInfo(parentCtx, index.Token)
+
 	default:
 		// We shouldn't be hitting this, but will err on the side of caution and
 		// simply proxy.
@@ -236,7 +254,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	index.RenewCtxInfo = &cachememdb.ContextInfo{
 		Ctx:        renewCtx,
 		CancelFunc: renewCtxInfo.CancelFunc,
-		DoneCh:     make(chan struct{}),
+		DoneCh:     renewCtxInfo.DoneCh,
 	}
 
 	// Start renewing the secret in the response
@@ -252,17 +270,14 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	return resp, nil
 }
 
-func (c *LeaseCache) ctxInfo(ctx context.Context, token string) *ContextInfo {
+func (c *LeaseCache) createCtxInfo(ctx context.Context, token string) *ContextInfo {
 	if ctx == nil {
 		ctx = c.baseCtxInfo.Ctx
 	}
-	ctxInfo, ok := c.tokenContexts[token]
-	if !ok {
-		ctxInfo = new(ContextInfo)
-		ctxInfo.Ctx, ctxInfo.CancelFunc = context.WithCancel(ctx)
-		ctxInfo.DoneCh = make(chan struct{})
-		c.tokenContexts[token] = ctxInfo
-	}
+	ctxInfo := new(ContextInfo)
+	ctxInfo.Ctx, ctxInfo.CancelFunc = context.WithCancel(ctx)
+	ctxInfo.DoneCh = make(chan struct{})
+	c.tokenContexts[token] = ctxInfo
 	return ctxInfo
 }
 
@@ -511,7 +526,11 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 			return nil
 		}
 		// Get the context for the given token and cancel its context
-		tokenCtxInfo := c.ctxInfo(nil, clearValue)
+		tokenCtxInfo := c.tokenContexts[clearValue]
+		if tokenCtxInfo == nil {
+			return nil
+		}
+
 		tokenCtxInfo.CancelFunc()
 
 		// Remove the cancelled context from the map

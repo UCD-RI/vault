@@ -31,6 +31,7 @@ func (ap *APIProxy) Send(ctx context.Context, req *SendRequest) (*SendResponse, 
 		return nil, err
 	}
 	client.SetToken(req.Token)
+	client.SetHeaders(req.Request.Header)
 
 	fwReq := client.NewRequest(req.Request.Method, req.Request.URL.Path)
 	fwReq.BodyBytes = req.RequestBody

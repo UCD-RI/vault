@@ -101,13 +101,14 @@ func newDB() (*memdb.MemDB, error) {
 // GetByPrefix returns all the cached indexes based on the index name and the
 // value prefix.
 func (c *CacheMemDB) GetByPrefix(indexName string, indexValues ...interface{}) ([]*Index, error) {
+	if indexNameFromString(indexName) == IndexNameInvalid {
+		return nil, fmt.Errorf("invalid index name %q", indexName)
+	}
+
 	indexName = indexName + "_prefix"
 
-	txn := c.db.Txn(false)
-	defer txn.Abort()
-
 	// Get all the objects
-	iter, err := txn.Get(tableNameIndexer, indexName, indexValues...)
+	iter, err := c.db.Txn(false).Get(tableNameIndexer, indexName, indexValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,7 @@ func (c *CacheMemDB) GetByPrefix(indexName string, indexValues ...interface{}) (
 		}
 		index, ok := obj.(*Index)
 		if !ok {
-			return nil, fmt.Errorf("failed to cast cached object")
+			return nil, fmt.Errorf("failed to cast cached index")
 		}
 
 		indexes = append(indexes, index)
@@ -130,15 +131,11 @@ func (c *CacheMemDB) GetByPrefix(indexName string, indexValues ...interface{}) (
 }
 
 func (c *CacheMemDB) Get(indexName string, indexValues ...interface{}) (*Index, error) {
-	in := indexNameFromString(indexName)
-	if in == IndexNameInvalid {
+	if indexNameFromString(indexName) == IndexNameInvalid {
 		return nil, fmt.Errorf("invalid index name %q", indexName)
 	}
 
-	txn := c.db.Txn(false)
-	defer txn.Abort()
-
-	raw, err := txn.First(tableNameIndexer, indexName, indexValues...)
+	raw, err := c.db.Txn(false).First(tableNameIndexer, indexName, indexValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +204,10 @@ func (c *CacheMemDB) EvictByPrefix(indexName, indexPrefix string) error {
 }
 
 func (c *CacheMemDB) batchEvict(isPrefix bool, indexName string, indexValues ...interface{}) error {
+	if indexNameFromString(indexName) == IndexNameInvalid {
+		return nil, fmt.Errorf("invalid index name %q", indexName)
+	}
+
 	if isPrefix {
 		indexName = indexName + "_prefix"
 	}

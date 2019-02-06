@@ -20,6 +20,7 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	cachememdb "github.com/hashicorp/vault/command/agent/cache/cachememdb"
+	"github.com/hashicorp/vault/helper/consts"
 	"github.com/hashicorp/vault/helper/contextutil"
 	"github.com/hashicorp/vault/helper/jsonutil"
 	nshelper "github.com/hashicorp/vault/helper/namespace"
@@ -152,7 +153,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	}
 
 	// Get the namespace from the request header
-	namespace := req.Request.Header.Get("X-Vault-Namespace")
+	namespace := req.Request.Header.Get(consts.NamespaceHeaderName)
 	// We need to populate an empty value since go-memdb will skip over indexes
 	// that contain empty values.
 	if namespace == "" {
@@ -291,7 +292,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	// Short-circuit if the secret is not renewable
 	renewable, err := secret.TokenIsRenewable()
 	if err != nil {
-		c.logger.Error("failed to parse renewable param")
+		c.logger.Error("failed to parse renewable param", "error", err)
 		return
 	}
 	if !renewable {
@@ -590,7 +591,7 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// Get the token from the request body
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return true, err
+			return false, err
 		}
 		token, ok := jsonBody["token"]
 		if !ok {
@@ -600,20 +601,20 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// Clear the cache entry associated with the token and all the other
 		// entries belonging to the leases derived from this token.
 		if err := c.handleCacheClear(ctx, "token", token.(string)); err != nil {
-			return true, err
+			return false, err
 		}
 
 	case path == vaultPathTokenRevokeSelf:
 		// Clear the cache entry associated with the token and all the other
 		// entries belonging to the leases derived from this token.
 		if err := c.handleCacheClear(ctx, "token", req.Token); err != nil {
-			return true, err
+			return false, err
 		}
 
 	case path == vaultPathTokenRevokeAccessor:
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return true, err
+			return false, err
 		}
 		accessor, ok := jsonBody["accessor"]
 		if !ok {
@@ -621,13 +622,13 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		}
 
 		if err := c.handleCacheClear(ctx, "token_accessor", accessor.(string)); err != nil {
-			return true, err
+			return false, err
 		}
 
 	case path == vaultPathTokenRevokeOrphan:
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return true, err
+			return false, err
 		}
 		token, ok := jsonBody["token"]
 		if !ok {
@@ -637,7 +638,7 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// Find out all the indexes that are directly tied to the revoked token
 		indexes, err := c.db.GetByPrefix(cachememdb.IndexNameToken.String(), token.(string))
 		if err != nil {
-			return true, err
+			return false, err
 		}
 
 		// Out of these indexes, one will be for the token itself and the rest
@@ -657,14 +658,14 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// Clear the parent references of the revoked token
 		indexes, err = c.db.GetByPrefix(cachememdb.IndexNameTokenParent.String(), token.(string))
 		if err != nil {
-			return true, err
+			return false, err
 		}
 		for _, index := range indexes {
 			index.TokenParent = ""
 			err = c.db.Set(index)
 			if err != nil {
 				c.logger.Error("failed to persist index", "error", err)
-				return true, err
+				return false, err
 			}
 		}
 
@@ -673,14 +674,14 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// Get the lease from the request body
 		jsonBody := map[string]interface{}{}
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
-			return true, err
+			return false, err
 		}
 		leaseID, ok := jsonBody["lease_id"]
 		if !ok {
 			return false, fmt.Errorf("failed to get lease_id from request body")
 		}
 		if err := c.handleCacheClear(ctx, "lease", leaseID.(string)); err != nil {
-			return true, err
+			return false, err
 		}
 
 	case strings.HasPrefix(path, vaultPathLeaseRevokeForce):
@@ -690,7 +691,7 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// prefix and cancel the renewer context of each.
 		indexes, err := c.db.GetByPrefix("request_path", namespace, "/v1"+prefix)
 		if err != nil {
-			return true, err
+			return false, err
 		}
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
@@ -703,11 +704,12 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		// prefix and cancel the renewer context of each.
 		indexes, err := c.db.GetByPrefix("request_path", namespace, "/v1"+prefix)
 		if err != nil {
-			return true, err
+			return false, err
 		}
 		for _, index := range indexes {
 			index.RenewCtxInfo.CancelFunc()
 		}
+
 	default:
 		return false, nil
 	}
@@ -752,7 +754,7 @@ func deriveNamespaceAndRelativePath(req *http.Request, paths []string) (string, 
 	}
 
 	namespace := "root/"
-	nsHeader := req.Header.Get("X-Vault-Namespace")
+	nsHeader := req.Header.Get(consts.NamespaceHeaderName)
 	if nsHeader != "" {
 		namespace = nsHeader
 	}

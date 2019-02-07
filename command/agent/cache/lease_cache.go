@@ -299,12 +299,12 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	}
 
 	// Short-circuit if the secret is not renewable
-	renewable, err := secret.TokenIsRenewable()
+	tokenRenewable, err := secret.TokenIsRenewable()
 	if err != nil {
 		c.logger.Error("failed to parse renewable param", "error", err)
 		return
 	}
-	if !renewable {
+	if !secret.Renewable || (secret.Auth != nil && !tokenRenewable) {
 		c.logger.Debug("secret not renewable, skipping addtion to the renewer")
 		return
 	}
@@ -317,8 +317,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	// Add a jitter of +-10% to half time
 	backoffDuration := time.Second * time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100)
 
-	c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
-	contextutil.BackoffOrQuit(ctx, backoffDuration)
+	// contextutil.BackoffOrQuit(ctx, backoffDuration)
 
 	cleanupFunc := func() {
 		id := ctx.Value(contextIndexID).(string)
@@ -341,6 +340,10 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 
 	go func(ctx context.Context, secret *api.Secret) {
 		defer cleanupFunc()
+
+		// Block initial renewal until after lease's half-life + jitter
+		// c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
+		// contextutil.BackoffOrQuit(ctx, backoffDuration)
 
 		client, err := api.NewClient(api.DefaultConfig())
 		if err != nil {
@@ -376,6 +379,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 
 				// Backoff from returning until the last bits of the lease
 				// duration is consumed
+				c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
 				contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(lastLeaseDuration))
 				return
 			case renewal := <-renewer.RenewCh():

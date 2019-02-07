@@ -23,14 +23,6 @@ const policyAdmin = `
 path "*" {
 	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
 }
-
-path "sys/mounts/" {
-	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
-}
-
-path "sys/mounts" {
-	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
-}
 `
 
 // testSetupClusterAndAgent is a helper func used to set up a test cluster and

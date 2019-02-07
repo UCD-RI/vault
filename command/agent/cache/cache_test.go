@@ -13,10 +13,25 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	kv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/builtin/credential/userpass"
 	"github.com/hashicorp/vault/helper/logging"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/vault"
 )
+
+const policyAdmin = `
+path "*" {
+	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
+}
+
+path "sys/mounts/" {
+	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
+}
+
+path "sys/mounts" {
+	capabilities = ["sudo", "create", "read", "update", "delete", "list"]
+}
+`
 
 // testSetupClusterAndAgent is a helper func used to set up a test cluster and
 // caching agent. It returns a cleanup func that should be deferred immediately
@@ -25,14 +40,25 @@ import (
 func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *api.Client, *api.Client) {
 	t.Helper()
 
+	// Handle sane defaults
 	if coreConfig == nil {
 		coreConfig = &vault.CoreConfig{
 			DisableMlock: true,
 			DisableCache: true,
 			Logger:       hclog.NewNullLogger(),
+			CredentialBackends: map[string]logical.Factory{
+				"userpass": userpass.Factory,
+			},
 		}
 	}
 
+	if coreConfig.CredentialBackends == nil {
+		coreConfig.CredentialBackends = map[string]logical.Factory{
+			"userpass": userpass.Factory,
+		}
+	}
+
+	// Init new test cluster
 	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
 		HandlerFunc: vaulthttp.Handler,
 	})
@@ -43,6 +69,25 @@ func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *
 
 	// clusterClient is the client that is used to talk directly to the cluster.
 	clusterClient := cores[0].Client
+
+	// Add an admin policy
+	if err := clusterClient.Sys().PutPolicy("admin", policyAdmin); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up the userpass auth backend and an admin user. Used for getting a token
+	// for the agent later down in this func.
+	clusterClient.Sys().EnableAuthWithOptions("userpass", &api.EnableAuthOptions{
+		Type: "userpass",
+	})
+
+	_, err := clusterClient.Logical().Write("auth/userpass/users/foo", map[string]interface{}{
+		"password": "bar",
+		"policies": []string{"admin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Set up env vars for agent consumption
 	origEnvVaultAddress := os.Getenv(api.EnvVaultAddress)
@@ -79,7 +124,15 @@ func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *
 		t.Fatal(err)
 	}
 
-	testClient.SetToken(cluster.RootToken)
+	// Login via userpass method to derive a managed token. Set that token as the
+	// testClient's token
+	resp, err := testClient.Logical().Write("auth/userpass/login/foo", map[string]interface{}{
+		"password": "bar",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testClient.SetToken(resp.Auth.ClientToken)
 
 	cleanup := func() {
 		cluster.Cleanup()
@@ -136,6 +189,13 @@ func TestCache_nonCacheable(t *testing.T) {
 func TestCache_AuthResponse(t *testing.T) {
 	cleanup, _, testClient := setupClusterAndAgent(t, nil)
 	defer cleanup()
+
+	resp, err := testClient.Logical().Write("auth/token/create", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := resp.Auth.ClientToken
+	testClient.SetToken(token)
 
 	// Test on auth response by creating a child token
 	{
@@ -198,8 +258,15 @@ func TestCache_LeaseResponse(t *testing.T) {
 		},
 	}
 
-	cleanup, _, testClient := setupClusterAndAgent(t, coreConfig)
+	cleanup, client, testClient := setupClusterAndAgent(t, coreConfig)
 	defer cleanup()
+
+	err := client.Sys().Mount("kv", &api.MountInput{
+		Type: "kv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Test proxy by issuing two different requests
 	{

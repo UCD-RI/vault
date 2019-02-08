@@ -32,6 +32,89 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 	return lc
 }
 
+func TestLeaseCache_Send_Cacheable(t *testing.T) {
+	// Emulate 2 responses from the api proxy. One returns a new token and the
+	// other returns a lease.
+	responses := []*SendResponse{
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+				},
+			},
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+		},
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo"}`)),
+				},
+			},
+			ResponseBody: []byte(`{"value": "output", "lease_id": "foo"}`),
+		},
+	}
+	lc := testNewLeaseCache(t, responses)
+
+	// Make a request. A response with a new token is returned to the lease
+	// cache and that will be cached.
+	url := "http://example.com/v1/sample/api"
+	sendReq := &SendRequest{
+		Token:   "blah",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err := lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+
+	// Send the same request again to get the cached response
+	sendReq = &SendRequest{
+		Token:   "blah",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err = lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+
+	// Modify the request a little bit to ensure the second response is
+	// returned to the lease cache. But make sure that the token in the request
+	// is valid.
+	sendReq = &SendRequest{
+		Token:   "test",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input_changed"}`)),
+	}
+	resp, err = lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+
+	// Make the same request again and ensure that the same reponse is returned
+	// again.
+	sendReq = &SendRequest{
+		Token:   "test",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input_changed"}`)),
+	}
+	resp, err = lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+}
+
 func TestLeaseCache_Send_NonCacheable(t *testing.T) {
 	// Create the cache
 	responses := []*SendResponse{
@@ -85,7 +168,7 @@ func TestLeaseCache_Send_NonCacheable(t *testing.T) {
 }
 
 func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
-	// Create the cache, the two responses should be cached.
+	// Create the cache
 	responses := []*SendResponse{
 		&SendResponse{
 			Response: &api.Response{
@@ -108,7 +191,9 @@ func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
 	}
 	lc := testNewLeaseCache(t, responses)
 
-	// Send a request, trigger the cache, which returns a response containing lease_id.
+	// Send a request, trigger the cache, which returns a response containing
+	// lease_id. Response will not be cached because it doesn't belong to a
+	// token that is managed by the lease cache.
 	url := "http://example.com/v1/sample/api"
 	sendReq := &SendRequest{
 		Token:   "foo",
@@ -122,7 +207,7 @@ func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
 		t.Fatalf("expected getting proxied response: got %v", diff)
 	}
 
-	// Verify response is cached by sending the same request.
+	// Verify that the response is not cached by sending the same request.
 	sendReq = &SendRequest{
 		Token:   "foo",
 		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),

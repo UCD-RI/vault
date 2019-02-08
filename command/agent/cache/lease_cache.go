@@ -21,7 +21,6 @@ import (
 	"github.com/hashicorp/vault/api"
 	cachememdb "github.com/hashicorp/vault/command/agent/cache/cachememdb"
 	"github.com/hashicorp/vault/helper/consts"
-	"github.com/hashicorp/vault/helper/contextutil"
 	"github.com/hashicorp/vault/helper/jsonutil"
 	nshelper "github.com/hashicorp/vault/helper/namespace"
 )
@@ -267,8 +266,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		DoneCh:     renewCtxInfo.DoneCh,
 	}
 
-	// Start renewing the secret in the response
-	go c.startRenewing(renewCtx, index, req, resp.ResponseBody)
+	c.logger.Debug("storing response into the cache")
 
 	// Store the index in the cache
 	err = c.db.Set(index)
@@ -276,6 +274,9 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		c.logger.Error("failed to cache the proxied response", "error", err)
 		return nil, err
 	}
+
+	// Start renewing the secret in the response
+	c.startRenewing(renewCtx, index, req, resp.ResponseBody)
 
 	return resp, nil
 }
@@ -309,16 +310,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		return
 	}
 
-	// Begin renewing when around half the lease duration is exhausted
-	leaseDuration := secret.LeaseDuration
-	if secret.Auth != nil {
-		leaseDuration = secret.Auth.LeaseDuration
-	}
-	// Add a jitter of +-10% to half time
-	backoffDuration := time.Second * time.Duration(leaseDuration*(c.rand.Intn(20)+40)/100)
-
-	// contextutil.BackoffOrQuit(ctx, backoffDuration)
-
 	cleanupFunc := func() {
 		id := ctx.Value(contextIndexID).(string)
 		c.logger.Debug("evicting index from cache", "id", id)
@@ -341,10 +332,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	go func(ctx context.Context, secret *api.Secret) {
 		defer cleanupFunc()
 
-		// Block initial renewal until after lease's half-life + jitter
-		// c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
-		// contextutil.BackoffOrQuit(ctx, backoffDuration)
-
 		client, err := api.NewClient(api.DefaultConfig())
 		if err != nil {
 			c.logger.Error("failed to create API client in the renewer", "error", err)
@@ -364,7 +351,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 		go renewer.Renew()
 		defer renewer.Stop()
 
-		var lastLeaseDuration int
 		for {
 			select {
 			case <-ctx.Done():
@@ -375,12 +361,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 					c.logger.Error("failed to renew secret", "error", err)
 					return
 				}
-				c.logger.Debug("renewal completed; evicting from cache", "path", req.Request.URL.Path)
-
-				// Backoff from returning until the last bits of the lease
-				// duration is consumed
-				c.logger.Debug("initiating backoff", "path", req.Request.URL.Path, "duration", backoffDuration.String())
-				contextutil.BackoffOrQuit(ctx, time.Second*time.Duration(lastLeaseDuration))
+				c.logger.Debug("renewal halted; evicting from cache", "path", req.Request.URL.Path)
 				return
 			case renewal := <-renewer.RenewCh():
 				c.logger.Debug("renewal received; updating cache", "path", req.Request.URL.Path)
@@ -388,10 +369,6 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 				if err != nil {
 					c.logger.Error("failed to handle renewal", "error", err)
 					return
-				}
-				lastLeaseDuration = renewal.Secret.LeaseDuration
-				if renewal.Secret.Auth != nil {
-					lastLeaseDuration = renewal.Secret.Auth.LeaseDuration
 				}
 			case <-index.RenewCtxInfo.DoneCh:
 				c.logger.Debug("done channel closed")

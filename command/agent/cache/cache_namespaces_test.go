@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/go-test/deep"
 	hclog "github.com/hashicorp/go-hclog"
@@ -179,14 +178,11 @@ func testHandleCacheClearNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	time.Sleep(1 * time.Second)
-
 	// Clear by request_path and namespace
 	clearPath := fmt.Sprintf("/v1/agent/cache-clear")
 	data := &cacheClearRequest{
-		Type:      "request_path",
-		Value:     "kv/foo",
-		Namespace: "ns1/",
+		Type:  "request_path",
+		Value: "/v1/ns1/kv/foo",
 	}
 
 	r := testClient.NewRequest("PUT", clearPath)

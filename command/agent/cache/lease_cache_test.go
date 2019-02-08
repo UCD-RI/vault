@@ -14,6 +14,7 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/helper/consts"
+	"github.com/hashicorp/vault/helper/logging"
 )
 
 func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
@@ -22,7 +23,7 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 	lc, err := NewLeaseCache(&LeaseCacheConfig{
 		BaseContext: context.Background(),
 		Proxier:     newMockProxier(responses),
-		Logger:      hclog.NewNullLogger(),
+		Logger:      logging.NewVaultLogger(hclog.Trace).Named("cache.leasecache"),
 	})
 
 	if err != nil {
@@ -31,84 +32,7 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 	return lc
 }
 
-func TestLeaseCache_Send(t *testing.T) {
-	// Create the cache, the two responses should be cached.
-	responses := []*SendResponse{
-		&SendResponse{
-			Response: &api.Response{
-				Response: &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo"}`)),
-				},
-			},
-			ResponseBody: []byte(`{"value": "output", "lease_id": "foo"}`),
-		},
-		&SendResponse{
-			Response: &api.Response{
-				Response: &http.Response{
-					StatusCode: http.StatusCreated,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
-				},
-			},
-			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
-		},
-	}
-	lc := testNewLeaseCache(t, responses)
-
-	// Send a request, trigger the cache, which returns a response containing lease_id.
-	sendReq := &SendRequest{
-		Token:   "foo",
-		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
-	}
-	resp, err := lc.Send(context.Background(), sendReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
-		t.Fatalf("expected getting proxied response: got %v", diff)
-	}
-
-	// Verify response is cached by sending the same request.
-	sendReq = &SendRequest{
-		Token:   "foo",
-		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
-	}
-	resp, err = lc.Send(context.Background(), sendReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
-		t.Fatalf("expected getting proxied response: got %v", diff)
-	}
-
-	// Send a request, trigger the cache, which returns a response containing the auth block.
-	sendReq = &SendRequest{
-		Token:   "bar",
-		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
-	}
-	resp, err = lc.Send(context.Background(), sendReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
-		t.Fatalf("expected getting proxied response: got %v", diff)
-	}
-
-	// Verify response is cached by sending the same request.
-	sendReq = &SendRequest{
-		Token:   "bar",
-		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
-	}
-	resp, err = lc.Send(context.Background(), sendReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
-		t.Fatalf("expected getting proxied response: got %v", diff)
-	}
-}
-
-func TestLeaseCache_Send_nonCacheable(t *testing.T) {
+func TestLeaseCache_Send_NonCacheable(t *testing.T) {
 	// Create the cache
 	responses := []*SendResponse{
 		&SendResponse{
@@ -156,6 +80,58 @@ func TestLeaseCache_Send_nonCacheable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if diff := deep.Equal(resp.Response.StatusCode, responses[1].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+}
+
+func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
+	// Create the cache, the two responses should be cached.
+	responses := []*SendResponse{
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo"}`)),
+				},
+			},
+			ResponseBody: []byte(`{"value": "output", "lease_id": "foo"}`),
+		},
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+				},
+			},
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+		},
+	}
+	lc := testNewLeaseCache(t, responses)
+
+	// Send a request, trigger the cache, which returns a response containing lease_id.
+	url := "http://example.com/v1/sample/api"
+	sendReq := &SendRequest{
+		Token:   "foo",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err := lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+
+	// Verify response is cached by sending the same request.
+	sendReq = &SendRequest{
+		Token:   "foo",
+		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err = lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff == nil {
 		t.Fatalf("expected getting proxied response: got %v", diff)
 	}
 }

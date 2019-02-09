@@ -2,8 +2,8 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"testing"
+	"time"
 
 	"github.com/go-test/deep"
 	hclog "github.com/hashicorp/go-hclog"
@@ -13,10 +13,33 @@ import (
 )
 
 func TestCache_Namespaces(t *testing.T) {
-	t.Parallel()
+
 	t.Run("send", testSendNamespaces)
-	t.Run("handle_cacheclear", testHandleCacheClearNamespaces)
-	t.Run("eviction_on_revocation", testEvictionOnRevocationNamespaces)
+
+	t.Run("full_path", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("handle_cacheclear", func(t *testing.T) {
+			testHandleCacheClearNamespaces(t, true)
+		})
+
+		t.Run("eviction_on_revocation", func(t *testing.T) {
+			testEvictionOnRevocationNamespaces(t, true)
+		})
+
+	})
+
+	t.Run("namespace_header", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("handle_cacheclear", func(t *testing.T) {
+			testHandleCacheClearNamespaces(t, false)
+		})
+
+		t.Run("eviction_on_revocation", func(t *testing.T) {
+			testEvictionOnRevocationNamespaces(t, false)
+		})
+	})
 }
 
 func testSendNamespaces(t *testing.T) {
@@ -134,7 +157,7 @@ func testSendNamespaces(t *testing.T) {
 	}
 }
 
-func testHandleCacheClearNamespaces(t *testing.T) {
+func testHandleCacheClearNamespaces(t *testing.T, fullPath bool) {
 	coreConfig := &vault.CoreConfig{
 		DisableMlock: true,
 		DisableCache: true,
@@ -172,20 +195,29 @@ func testHandleCacheClearNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	requestPath := "/kv/foo"
+	testClient.SetNamespace("ns1/")
+	if fullPath {
+		requestPath = "/ns1" + requestPath
+		testClient.SetNamespace("")
+	}
+
 	// Request the secret
-	firstResp, err := testClient.Logical().Read("/ns1/kv/foo")
+	firstResp, err := testClient.Logical().Read(requestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	time.Sleep(200 * time.Millisecond)
+
 	// Clear by request_path and namespace
-	clearPath := fmt.Sprintf("/v1/agent/cache-clear")
+	requestPathValue := "/v1" + requestPath
 	data := &cacheClearRequest{
 		Type:  "request_path",
-		Value: "/v1/ns1/kv/foo",
+		Value: requestPathValue,
 	}
 
-	r := testClient.NewRequest("PUT", clearPath)
+	r := testClient.NewRequest("PUT", "/v1/agent/cache-clear")
 	if err := r.SetJSONBody(data); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +229,9 @@ func testHandleCacheClearNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondResp, err := testClient.Logical().Read("/ns1/kv/foo")
+	time.Sleep(200 * time.Millisecond)
+
+	secondResp, err := testClient.Logical().Read(requestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +243,72 @@ func testHandleCacheClearNamespaces(t *testing.T) {
 	}
 }
 
-func testEvictionOnRevocationNamespaces(t *testing.T) {
-	t.Skip("not implemented")
+func testEvictionOnRevocationNamespaces(t *testing.T, fullPath bool) {
+	coreConfig := &vault.CoreConfig{
+		DisableMlock: true,
+		DisableCache: true,
+		Logger:       hclog.NewNullLogger(),
+		LogicalBackends: map[string]logical.Factory{
+			"kv": vault.LeasedPassthroughBackendFactory,
+		},
+	}
+
+	cleanup, clusterClient, testClient := setupClusterAndAgent(t, coreConfig)
+	defer cleanup()
+
+	// Create a namespace
+	_, err := clusterClient.Logical().Write("sys/namespaces/ns1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mount the leased KV into ns1
+	clusterClient.SetNamespace("ns1/")
+	err = clusterClient.Sys().Mount("kv", &api.MountInput{
+		Type: "kv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterClient.SetNamespace("")
+
+	// Write some random value
+	_, err = clusterClient.Logical().Write("/ns1/kv/foo", map[string]interface{}{
+		"value": "test",
+		"ttl":   "1h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestPath := "/kv/foo"
+	testClient.SetNamespace("ns1/")
+	if fullPath {
+		requestPath = "/ns1" + requestPath
+		testClient.SetNamespace("")
+	}
+
+	// Request the secret
+	firstResp, err := testClient.Logical().Read(requestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaseID := firstResp.LeaseID
+
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = testClient.Logical().Write("/ns1/sys/leases/revoke", map[string]interface{}{
+		"lease_id": leaseID,
+	})
+
+	secondResp, err := testClient.Logical().Read(requestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(firstResp, secondResp); diff == nil {
+		t.Logf("response #1: %#v", firstResp)
+		t.Logf("response #2: %#v", secondResp)
+		t.Fatal("expected requests to be not cached")
+	}
 }

@@ -338,6 +338,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 			return
 		}
 		client.SetToken(req.Token)
+		client.SetHeaders(req.Request.Header)
 
 		renewer, err := client.NewRenewer(&api.RenewerInput{
 			Secret: secret,

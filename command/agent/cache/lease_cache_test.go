@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -30,6 +31,43 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 		t.Fatal(err)
 	}
 	return lc
+}
+
+func TestCache_ComputeIndexID(t *testing.T) {
+	type args struct {
+		req *http.Request
+	}
+	tests := []struct {
+		name    string
+		req     *SendRequest
+		want    string
+		wantErr bool
+	}{
+		{
+			"basic",
+			&SendRequest{
+				Request: &http.Request{
+					URL: &url.URL{
+						Path: "test",
+					},
+				},
+			},
+			"2edc7e965c3e1bdce3b1d5f79a52927842569c0734a86544d222753f11ae4847",
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := computeIndexID(tt.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("actual_error: %v, expected_error: %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, string(tt.want)) {
+				t.Errorf("bad: index id; actual: %q, expected: %q", got, string(tt.want))
+			}
+		})
+	}
 }
 
 func TestCache_LeaseCache_EmptyToken(t *testing.T) {

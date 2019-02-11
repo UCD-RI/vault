@@ -70,19 +70,19 @@ func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 			Response: &api.Response{
 				Response: &http.Response{
 					StatusCode: http.StatusCreated,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test", "renewable": true}}`)),
 				},
 			},
-			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test", "renewable": true}}`),
 		},
 		&SendResponse{
 			Response: &api.Response{
 				Response: &http.Response{
 					StatusCode: http.StatusOK,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo"}`)),
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "output", "lease_id": "foo", "renewable": true}`)),
 				},
 			},
-			ResponseBody: []byte(`{"value": "output", "lease_id": "foo"}`),
+			ResponseBody: []byte(`{"value": "output", "lease_id": "foo", "renewable": true}`),
 		},
 	}
 	lc := testNewLeaseCache(t, responses)
@@ -144,7 +144,6 @@ func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 }
 
 func TestCache_LeaseCache_SendNonCacheable(t *testing.T) {
-	// Create the cache
 	responses := []*SendResponse{
 		&SendResponse{
 			Response: &api.Response{
@@ -165,12 +164,11 @@ func TestCache_LeaseCache_SendNonCacheable(t *testing.T) {
 	}
 	lc := testNewLeaseCache(t, responses)
 
+	// Send a request through the lease cache which is not cacheable (there is
+	// no lease information or auth information in the response)
 	sendReq := &SendRequest{
-		Token:   "foo",
 		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
 	}
-
-	// Insert into the empty cache.
 	resp, err := lc.Send(context.Background(), sendReq)
 	if err != nil {
 		t.Fatal(err)
@@ -179,13 +177,12 @@ func TestCache_LeaseCache_SendNonCacheable(t *testing.T) {
 		t.Fatalf("expected getting proxied response: got %v", diff)
 	}
 
-	// Check that the response is non-cacheable (e.g. missing lease_id or auth
-	// block). Should return status from the second expected response.
+	// Since the response is non-cacheable, the second response will be
+	// returned.
 	sendReq = &SendRequest{
 		Token:   "foo",
 		Request: httptest.NewRequest("GET", "http://example.com", strings.NewReader(`{"value": "input"}`)),
 	}
-
 	resp, err = lc.Send(context.Background(), sendReq)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +216,7 @@ func TestCache_LeaseCache_SendNonCacheableNonTokenLease(t *testing.T) {
 	}
 	lc := testNewLeaseCache(t, responses)
 
-	// Send a request, trigger the cache, which returns a response containing
+	// Send a request through lease cache which returns a response containing
 	// lease_id. Response will not be cached because it doesn't belong to a
 	// token that is managed by the lease cache.
 	urlPath := "http://example.com/v1/sample/api"
@@ -235,7 +232,8 @@ func TestCache_LeaseCache_SendNonCacheableNonTokenLease(t *testing.T) {
 		t.Fatalf("expected getting proxied response: got %v", diff)
 	}
 
-	// Verify that the response is not cached by sending the same request.
+	// Verify that the response is not cached by sending the same request and
+	// by expecting a different response.
 	sendReq = &SendRequest{
 		Token:   "foo",
 		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
@@ -314,7 +312,7 @@ func TestCache_LeaseCache_HandleCacheClear(t *testing.T) {
 			reqBody := fmt.Sprintf("{\"type\": \"%s\", \"value\": \"%s\"}", tc.reqType, tc.reqValue)
 			resp, err := http.Post(ts.URL, "application/json", strings.NewReader(reqBody))
 			if err != nil {
-				t.Fatal()
+				t.Fatal(err)
 			}
 			if tc.expectedStatusCode != resp.StatusCode {
 				t.Fatalf("status code mismatch: expected = %v, got = %v", tc.expectedStatusCode, resp.StatusCode)

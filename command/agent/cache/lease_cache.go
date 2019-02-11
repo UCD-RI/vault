@@ -266,7 +266,18 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		DoneCh:     renewCtxInfo.DoneCh,
 	}
 
-	c.logger.Debug("storing response into the cache")
+	// Short-circuit if the secret is not renewable
+	tokenRenewable, err := secret.TokenIsRenewable()
+	if err != nil {
+		c.logger.Error("failed to parse renewable param", "error", err)
+		return nil, err
+	}
+	if !secret.Renewable && !tokenRenewable {
+		c.logger.Debug("secret not renewable, skipping addtion to the renewer")
+		return resp, nil
+	}
+
+	c.logger.Debug("storing response into the cache and starting the secret renewal")
 
 	// Store the index in the cache
 	err = c.db.Set(index)
@@ -276,7 +287,7 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 	}
 
 	// Start renewing the secret in the response
-	c.startRenewing(renewCtx, index, req, resp.ResponseBody)
+	go c.startRenewing(renewCtx, index, req, secret)
 
 	return resp, nil
 }
@@ -292,92 +303,61 @@ func (c *LeaseCache) createCtxInfo(ctx context.Context, token string) *ContextIn
 	return ctxInfo
 }
 
-func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, respBody []byte) {
-	secret, err := api.ParseSecret(bytes.NewBuffer(respBody))
-	if err != nil {
-		c.logger.Error("failed to parse secret from response body", "error", err)
-		return
-	}
-
-	// Short-circuit if the secret is not renewable
-	tokenRenewable, err := secret.TokenIsRenewable()
-	if err != nil {
-		c.logger.Error("failed to parse renewable param", "error", err)
-		return
-	}
-	if !secret.Renewable || (secret.Auth != nil && !tokenRenewable) {
-		c.logger.Debug("secret not renewable, skipping addtion to the renewer")
-		return
-	}
-
-	cleanupFunc := func() {
+func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index, req *SendRequest, secret *api.Secret) {
+	defer func() {
 		id := ctx.Value(contextIndexID).(string)
 		c.logger.Debug("evicting index from cache", "id", id)
-		err = c.db.Evict(cachememdb.IndexNameID.String(), id)
+		err := c.db.Evict(cachememdb.IndexNameID.String(), id)
 		if err != nil {
 			c.logger.Error("failed to evict index", "id", id, "error", err)
 			return
 		}
-	}
+	}()
 
-	// Fast path for shutdown
-	select {
-	case <-ctx.Done():
-		c.logger.Debug("shutdown triggered, not starting the renewer", "path", req.Request.URL.Path)
-		cleanupFunc()
+	client, err := api.NewClient(api.DefaultConfig())
+	if err != nil {
+		c.logger.Error("failed to create API client in the renewer", "error", err)
 		return
-	default:
+	}
+	client.SetToken(req.Token)
+	client.SetHeaders(req.Request.Header)
+
+	renewer, err := client.NewRenewer(&api.RenewerInput{
+		Secret: secret,
+	})
+	if err != nil {
+		c.logger.Error("failed to create secret renewer", "error", err)
+		return
 	}
 
-	go func(ctx context.Context, secret *api.Secret) {
-		defer cleanupFunc()
+	c.logger.Debug("initiating renewal", "path", req.Request.URL.Path)
+	go renewer.Renew()
+	defer renewer.Stop()
 
-		client, err := api.NewClient(api.DefaultConfig())
-		if err != nil {
-			c.logger.Error("failed to create API client in the renewer", "error", err)
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.URL.Path)
 			return
-		}
-		client.SetToken(req.Token)
-		client.SetHeaders(req.Request.Header)
-
-		renewer, err := client.NewRenewer(&api.RenewerInput{
-			Secret: secret,
-		})
-		if err != nil {
-			c.logger.Error("failed to create secret renewer", "error", err)
-			return
-		}
-
-		c.logger.Debug("initiating renewal", "path", req.Request.URL.Path)
-		go renewer.Renew()
-		defer renewer.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.URL.Path)
-				return
-			case err := <-renewer.DoneCh():
-				if err != nil {
-					c.logger.Error("failed to renew secret", "error", err)
-					return
-				}
-				c.logger.Debug("renewal halted; evicting from cache", "path", req.Request.URL.Path)
-				return
-			case renewal := <-renewer.RenewCh():
-				c.logger.Debug("renewal received; updating cache", "path", req.Request.URL.Path)
-				err = c.updateResponse(ctx, renewal)
-				if err != nil {
-					c.logger.Error("failed to handle renewal", "error", err)
-					return
-				}
-			case <-index.RenewCtxInfo.DoneCh:
-				c.logger.Debug("done channel closed")
+		case err := <-renewer.DoneCh():
+			if err != nil {
+				c.logger.Error("failed to renew secret", "error", err)
 				return
 			}
+			c.logger.Debug("renewal halted; evicting from cache", "path", req.Request.URL.Path)
+			return
+		case renewal := <-renewer.RenewCh():
+			c.logger.Debug("renewal received; updating cache", "path", req.Request.URL.Path)
+			err = c.updateResponse(ctx, renewal)
+			if err != nil {
+				c.logger.Error("failed to handle renewal", "error", err)
+				return
+			}
+		case <-index.RenewCtxInfo.DoneCh:
+			c.logger.Debug("done channel closed")
+			return
 		}
-
-	}(ctx, secret)
+	}
 }
 
 func (c *LeaseCache) updateResponse(ctx context.Context, renewal *api.RenewOutput) error {

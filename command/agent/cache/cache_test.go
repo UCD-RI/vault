@@ -136,7 +136,7 @@ func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *
 	return cleanup, clusterClient, testClient
 }
 
-func TestCache_nonCacheable(t *testing.T) {
+func TestCache_NonCacheable(t *testing.T) {
 	coreConfig := &vault.CoreConfig{
 		DisableMlock: true,
 		DisableCache: true,

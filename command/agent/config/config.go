@@ -152,21 +152,27 @@ func parseListeners(result *Config, list *ast.ObjectList) error {
 
 	var listeners []*Listener
 	for _, item := range listenerList.Items {
-		if len(item.Keys) != 1 {
+		var lnConfig map[string]interface{}
+		err := hcl.DecodeObject(&lnConfig, item.Val)
+		if err != nil {
+			return err
+		}
+
+		var lnType string
+		switch {
+		case lnConfig["type"] != nil:
+			lnType = lnConfig["type"].(string)
+			delete(lnConfig, "type")
+		case len(item.Keys) == 1:
+			lnType = strings.ToLower(item.Keys[0].Token.Value().(string))
+		default:
 			return errors.New("listener type must be specified")
 		}
-		lnType := strings.ToLower(item.Keys[0].Token.Value().(string))
 
 		switch lnType {
 		case "unix", "tcp":
 		default:
 			return fmt.Errorf("invalid listener type %q", lnType)
-		}
-
-		var lnConfig map[string]interface{}
-		err := hcl.DecodeObject(&lnConfig, item.Val)
-		if err != nil {
-			return err
 		}
 
 		listeners = append(listeners, &Listener{

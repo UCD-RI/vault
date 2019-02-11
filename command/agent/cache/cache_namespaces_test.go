@@ -13,12 +13,9 @@ import (
 )
 
 func TestCache_Namespaces(t *testing.T) {
-
 	t.Run("send", testSendNamespaces)
 
 	t.Run("full_path", func(t *testing.T) {
-		t.Parallel()
-
 		t.Run("handle_cacheclear", func(t *testing.T) {
 			testHandleCacheClearNamespaces(t, true)
 		})
@@ -26,12 +23,9 @@ func TestCache_Namespaces(t *testing.T) {
 		t.Run("eviction_on_revocation", func(t *testing.T) {
 			testEvictionOnRevocationNamespaces(t, true)
 		})
-
 	})
 
 	t.Run("namespace_header", func(t *testing.T) {
-		t.Parallel()
-
 		t.Run("handle_cacheclear", func(t *testing.T) {
 			testHandleCacheClearNamespaces(t, false)
 		})

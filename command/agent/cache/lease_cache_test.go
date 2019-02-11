@@ -32,7 +32,37 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 	return lc
 }
 
-func TestLeaseCache_Send_Cacheable(t *testing.T) {
+func TestCache_LeaseCache_EmptyToken(t *testing.T) {
+	responses := []*SendResponse{
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+				},
+			},
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+		},
+	}
+	lc := testNewLeaseCache(t, responses)
+
+	// Even if the send request doesn't have a token on it, a successful
+	// cacheable response should result in the index properly getting populated
+	// with a token and memdb shouldn't complain while inserting the index.
+	urlPath := "http://example.com/v1/sample/api"
+	sendReq := &SendRequest{
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err := lc.Send(context.Background(), sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatalf("expected a non empty response")
+	}
+}
+
+func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 	// Emulate 2 responses from the api proxy. One returns a new token and the
 	// other returns a lease.
 	responses := []*SendResponse{
@@ -59,10 +89,9 @@ func TestLeaseCache_Send_Cacheable(t *testing.T) {
 
 	// Make a request. A response with a new token is returned to the lease
 	// cache and that will be cached.
-	url := "http://example.com/v1/sample/api"
+	urlPath := "http://example.com/v1/sample/api"
 	sendReq := &SendRequest{
-		Token:   "blah",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
 	}
 	resp, err := lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -74,8 +103,7 @@ func TestLeaseCache_Send_Cacheable(t *testing.T) {
 
 	// Send the same request again to get the cached response
 	sendReq = &SendRequest{
-		Token:   "blah",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -90,7 +118,7 @@ func TestLeaseCache_Send_Cacheable(t *testing.T) {
 	// is valid.
 	sendReq = &SendRequest{
 		Token:   "test",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input_changed"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input_changed"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -104,7 +132,7 @@ func TestLeaseCache_Send_Cacheable(t *testing.T) {
 	// again.
 	sendReq = &SendRequest{
 		Token:   "test",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input_changed"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input_changed"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -115,7 +143,7 @@ func TestLeaseCache_Send_Cacheable(t *testing.T) {
 	}
 }
 
-func TestLeaseCache_Send_NonCacheable(t *testing.T) {
+func TestCache_LeaseCache_SendNonCacheable(t *testing.T) {
 	// Create the cache
 	responses := []*SendResponse{
 		&SendResponse{
@@ -167,7 +195,7 @@ func TestLeaseCache_Send_NonCacheable(t *testing.T) {
 	}
 }
 
-func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
+func TestCache_LeaseCache_SendNonCacheableNonTokenLease(t *testing.T) {
 	// Create the cache
 	responses := []*SendResponse{
 		&SendResponse{
@@ -194,10 +222,10 @@ func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
 	// Send a request, trigger the cache, which returns a response containing
 	// lease_id. Response will not be cached because it doesn't belong to a
 	// token that is managed by the lease cache.
-	url := "http://example.com/v1/sample/api"
+	urlPath := "http://example.com/v1/sample/api"
 	sendReq := &SendRequest{
 		Token:   "foo",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
 	}
 	resp, err := lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -210,7 +238,7 @@ func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
 	// Verify that the response is not cached by sending the same request.
 	sendReq = &SendRequest{
 		Token:   "foo",
-		Request: httptest.NewRequest("GET", url, strings.NewReader(`{"value": "input"}`)),
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
 	if err != nil {
@@ -221,7 +249,7 @@ func TestLeaseCache_Send_NonCacheable_NonTokenLease(t *testing.T) {
 	}
 }
 
-func TestLeaseCache_HandleCacheClear(t *testing.T) {
+func TestCache_LeaseCache_HandleCacheClear(t *testing.T) {
 	lc := testNewLeaseCache(t, nil)
 
 	handler := lc.HandleCacheClear(context.Background())
@@ -295,7 +323,7 @@ func TestLeaseCache_HandleCacheClear(t *testing.T) {
 	}
 }
 
-func Test_deriveNamespaceAndRevocationPath(t *testing.T) {
+func TestCache_DeriveNamespaceAndRevocationPath(t *testing.T) {
 	tests := []struct {
 		name             string
 		req              *SendRequest

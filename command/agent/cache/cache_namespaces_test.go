@@ -291,7 +291,13 @@ func testEvictionOnRevocationNamespaces(t *testing.T, fullPath bool) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	_, err = testClient.Logical().Write("/ns1/sys/leases/revoke", map[string]interface{}{
+	revocationPath := "/sys/leases/revoke"
+	if fullPath {
+		revocationPath = "/ns1/" + revocationPath
+		testClient.SetNamespace("")
+	}
+
+	_, err = testClient.Logical().Write(revocationPath, map[string]interface{}{
 		"lease_id": leaseID,
 	})
 

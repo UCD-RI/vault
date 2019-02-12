@@ -519,6 +519,9 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 		}
 		index.RenewCtxInfo.CancelFunc()
 
+		// Remove the cancelled context from the map
+		delete(c.tokenContexts, index.Token)
+
 	case "all":
 		// Cancel the base context which triggers all the goroutines to
 		// stop and evict entries from cache.
@@ -535,6 +538,9 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 		if err := c.db.Flush(); err != nil {
 			return err
 		}
+
+		// Reset the token contexts map
+		c.tokenContexts = make(map[string]*ContextInfo)
 
 	default:
 		return errInvalidType

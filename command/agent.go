@@ -341,33 +341,33 @@ func (c *AgentCommand) Run(args []string) int {
 
 	// Parse agent listener configurations
 	var listeners []net.Listener
-	if len(config.Cache.Listeners) != 0 {
+	if config.Cache != nil && len(config.Cache.Listeners) != 0 {
 		listeners, err = cache.ServerListeners(config.Cache.Listeners, c.logWriter, c.UI)
 		if err != nil {
 			c.UI.Error(fmt.Sprintf("Error running listeners: %v", err))
 			return 1
 		}
-	}
 
-	// Start listening to requests
-	err = cache.Run(ctx, &cache.Config{
-		Token:            c.client.Token(),
-		UseAutoAuthToken: config.Cache.UseAutoAuthToken,
-		Listeners:        listeners,
-		Logger:           c.logger.Named("cache"),
-	})
-	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error starting the cache listeners: %v", err))
-		return 1
-	}
-
-	// Ensure that listeners are closed at all the exits
-	listenerCloseFunc := func() {
-		for _, ln := range listeners {
-			ln.Close()
+		// Start listening to requests
+		err = cache.Run(ctx, &cache.Config{
+			Token:            c.client.Token(),
+			UseAutoAuthToken: config.Cache.UseAutoAuthToken,
+			Listeners:        listeners,
+			Logger:           c.logger.Named("cache"),
+		})
+		if err != nil {
+			c.UI.Error(fmt.Sprintf("Error starting the cache listeners: %v", err))
+			return 1
 		}
+
+		// Ensure that listeners are closed at all the exits
+		listenerCloseFunc := func() {
+			for _, ln := range listeners {
+				ln.Close()
+			}
+		}
+		defer c.cleanupGuard.Do(listenerCloseFunc)
 	}
-	defer c.cleanupGuard.Do(listenerCloseFunc)
 
 	// Release the log gate.
 	c.logGate.Flush()

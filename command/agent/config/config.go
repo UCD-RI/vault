@@ -114,7 +114,11 @@ func parseCache(result *Config, list *ast.ObjectList) error {
 	name := "cache"
 
 	cacheList := list.Filter(name)
-	if len(cacheList.Items) != 1 {
+	if len(cacheList.Items) == 0 {
+		return nil
+	}
+
+	if len(cacheList.Items) > 1 {
 		return fmt.Errorf("one and only one %q block is required", name)
 	}
 

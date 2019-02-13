@@ -14,13 +14,14 @@ import (
 
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/helper/consts"
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 )
 
 type Config struct {
-	Token            string
+	Client           *api.Client
 	Proxier          Proxier
 	UseAutoAuthToken bool
 	Listeners        []net.Listener
@@ -71,7 +72,8 @@ func handler(ctx context.Context, config *Config) http.Handler {
 
 		token := r.Header.Get(consts.AuthHeaderName)
 		if token == "" && config.UseAutoAuthToken {
-			token = config.Token
+			config.Logger.Debug("using auto auth token")
+			token = config.Client.Token()
 		}
 
 		// Parse and reset body.

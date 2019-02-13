@@ -350,7 +350,7 @@ func (c *AgentCommand) Run(args []string) int {
 
 		// Start listening to requests
 		err = cache.Run(ctx, &cache.Config{
-			Token:            c.client.Token(),
+			Client:           c.client,
 			UseAutoAuthToken: config.Cache.UseAutoAuthToken,
 			Listeners:        listeners,
 			Logger:           c.logger.Named("cache"),

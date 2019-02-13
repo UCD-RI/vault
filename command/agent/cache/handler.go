@@ -94,6 +94,8 @@ func handler(ctx context.Context, config *Config) http.Handler {
 			return
 		}
 
+		defer resp.Response.Body.Close()
+
 		copyHeader(w.Header(), resp.Response.Header)
 		w.WriteHeader(resp.Response.StatusCode)
 		io.Copy(w, resp.Response.Body)

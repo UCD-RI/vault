@@ -25,7 +25,7 @@ path "*" {
 }
 `
 
-// testSetupClusterAndAgent is a helper func used to set up a test cluster and
+// setupClusterAndAgent is a helper func used to set up a test cluster and
 // caching agent. It returns a cleanup func that should be deferred immediately
 // along with two clients, one for direct cluster communication and another to
 // talk to the caching agent.

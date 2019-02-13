@@ -11,10 +11,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/errwrap"
 	hclog "github.com/hashicorp/go-hclog"
@@ -65,7 +63,6 @@ type LeaseCache struct {
 	proxier       Proxier
 	logger        hclog.Logger
 	db            *cachememdb.CacheMemDB
-	rand          *rand.Rand
 	tokenContexts map[string]*ContextInfo
 	baseCtxInfo   *ContextInfo
 }
@@ -111,7 +108,6 @@ func NewLeaseCache(conf *LeaseCacheConfig) (*LeaseCache, error) {
 		proxier:       conf.Proxier,
 		logger:        conf.Logger,
 		db:            db,
-		rand:          rand.New(rand.NewSource(int64(time.Now().Nanosecond()))),
 		tokenContexts: make(map[string]*ContextInfo),
 		baseCtxInfo:   baseCtxInfo,
 	}, nil

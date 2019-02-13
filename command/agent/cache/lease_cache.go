@@ -567,14 +567,18 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return false, err
 		}
-		token, ok := jsonBody["token"]
+		tokenRaw, ok := jsonBody["token"]
 		if !ok {
 			return false, fmt.Errorf("failed to get token from request body")
+		}
+		token, ok := tokenRaw.(string)
+		if !ok {
+			return false, fmt.Errorf("expected token in the request body to be string")
 		}
 
 		// Clear the cache entry associated with the token and all the other
 		// entries belonging to the leases derived from this token.
-		if err := c.handleCacheClear(ctx, "token", token.(string)); err != nil {
+		if err := c.handleCacheClear(ctx, "token", token); err != nil {
 			return false, err
 		}
 
@@ -590,12 +594,16 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return false, err
 		}
-		accessor, ok := jsonBody["accessor"]
+		accessorRaw, ok := jsonBody["accessor"]
 		if !ok {
 			return false, fmt.Errorf("failed to get accessor from request body")
 		}
+		accessor, ok := accessorRaw.(string)
+		if !ok {
+			return false, fmt.Errorf("expected accessor in the request body to be string")
+		}
 
-		if err := c.handleCacheClear(ctx, "token_accessor", accessor.(string)); err != nil {
+		if err := c.handleCacheClear(ctx, "token_accessor", accessor); err != nil {
 			return false, err
 		}
 
@@ -604,13 +612,17 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return false, err
 		}
-		token, ok := jsonBody["token"]
+		tokenRaw, ok := jsonBody["token"]
 		if !ok {
 			return false, fmt.Errorf("failed to get token from request body")
 		}
+		token, ok := tokenRaw.(string)
+		if !ok {
+			return false, fmt.Errorf("expected token in the request body to be string")
+		}
 
 		// Find out all the indexes that are directly tied to the revoked token
-		indexes, err := c.db.GetByPrefix(cachememdb.IndexNameToken.String(), token.(string))
+		indexes, err := c.db.GetByPrefix(cachememdb.IndexNameToken.String(), token)
 		if err != nil {
 			return false, err
 		}
@@ -630,7 +642,7 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		}
 
 		// Clear the parent references of the revoked token
-		indexes, err = c.db.GetByPrefix(cachememdb.IndexNameTokenParent.String(), token.(string))
+		indexes, err = c.db.GetByPrefix(cachememdb.IndexNameTokenParent.String(), token)
 		if err != nil {
 			return false, err
 		}
@@ -650,11 +662,15 @@ func (c *LeaseCache) handleRevocationRequest(ctx context.Context, req *SendReque
 		if err := json.Unmarshal(req.RequestBody, &jsonBody); err != nil {
 			return false, err
 		}
-		leaseID, ok := jsonBody["lease_id"]
+		leaseIDRaw, ok := jsonBody["lease_id"]
 		if !ok {
 			return false, fmt.Errorf("failed to get lease_id from request body")
 		}
-		if err := c.handleCacheClear(ctx, "lease", leaseID.(string)); err != nil {
+		leaseID, ok := leaseIDRaw.(string)
+		if !ok {
+			return false, fmt.Errorf("expected lease_id the request body to be string")
+		}
+		if err := c.handleCacheClear(ctx, "lease", leaseID); err != nil {
 			return false, err
 		}
 

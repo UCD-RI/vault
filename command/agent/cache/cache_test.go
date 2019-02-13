@@ -97,7 +97,7 @@ func setupClusterAndAgent(t *testing.T, coreConfig *vault.CoreConfig) (func(), *
 
 	// Start listening to requests
 	err = Run(ctx, &Config{
-		Token:            clusterClient.Token(),
+		Client:           clusterClient,
 		UseAutoAuthToken: false,
 		Listeners:        []net.Listener{listener},
 		Logger:           cacheLogger.Named("cache"),

@@ -25,7 +25,7 @@ cache {
 
 	listener {
 		type = "unix"
-		address = "/Users/vishal/go/src/github.com/hashicorp/vault/socket"
+		address = "/path/to/socket"
 		tls_disable = true
 	}
 
@@ -38,7 +38,7 @@ cache {
 	listener {
 		type = "tcp"
 		address = "127.0.0.1:8400"
-		tls_key_file = "/Users/vishal/go/src/github.com/hashicorp/vault/cakey.pem"
-		tls_cert_file = "/Users/vishal/go/src/github.com/hashicorp/vault/cacert.pem"
+		tls_key_file = "/path/to/cakey.pem"
+		tls_cert_file = "/path/to/cacert.pem"
 	}
 }

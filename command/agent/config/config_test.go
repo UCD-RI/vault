@@ -13,9 +13,6 @@ import (
 func TestLoadConfigFile_AgentCache(t *testing.T) {
 	logger := logging.NewVaultLogger(log.Debug)
 
-	os.Setenv("TEST_AAD_ENV", "aad")
-	defer os.Unsetenv("TEST_AAD_ENV")
-
 	config, err := LoadConfig("./test-fixtures/config-cache.hcl", logger)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +46,7 @@ func TestLoadConfigFile_AgentCache(t *testing.T) {
 				&Listener{
 					Type: "unix",
 					Config: map[string]interface{}{
-						"address":     "/Users/vishal/go/src/github.com/hashicorp/vault/socket",
+						"address":     "/path/to/socket",
 						"tls_disable": true,
 					},
 				},
@@ -64,8 +61,8 @@ func TestLoadConfigFile_AgentCache(t *testing.T) {
 					Type: "tcp",
 					Config: map[string]interface{}{
 						"address":       "127.0.0.1:8400",
-						"tls_key_file":  "/Users/vishal/go/src/github.com/hashicorp/vault/cakey.pem",
-						"tls_cert_file": "/Users/vishal/go/src/github.com/hashicorp/vault/cacert.pem",
+						"tls_key_file":  "/path/to/cakey.pem",
+						"tls_cert_file": "/path/to/cacert.pem",
 					},
 				},
 			},

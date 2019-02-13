@@ -29,6 +29,10 @@ type Config struct {
 }
 
 func Run(ctx context.Context, config *Config) error {
+	if config == nil {
+		return errors.New("nil configuration")
+	}
+
 	// Create the API proxier
 	apiProxy := NewAPIProxy(&APIProxyConfig{
 		Logger: config.Logger.Named("apiproxy"),

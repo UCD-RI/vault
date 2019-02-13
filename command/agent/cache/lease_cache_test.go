@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-test/deep"
 	hclog "github.com/hashicorp/go-hclog"
@@ -31,6 +32,130 @@ func testNewLeaseCache(t *testing.T, responses []*SendResponse) *LeaseCache {
 		t.Fatal(err)
 	}
 	return lc
+}
+
+func TestCache_TokenContextCleanup(t *testing.T) {
+	response1 := `{"value": "invalid", "auth": {"client_token": "testtoken", "renewable": true, "accessor": "testaccessor"}}`
+	responses := []*SendResponse{
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       ioutil.NopCloser(strings.NewReader(response1)),
+				},
+			},
+			ResponseBody: []byte(response1),
+		},
+		&SendResponse{
+			Response: &api.Response{
+				Response: &http.Response{
+					StatusCode: http.StatusNoContent,
+				},
+			},
+			ResponseBody: nil,
+		},
+	}
+	lc := testNewLeaseCache(t, responses)
+	ctx := context.Background()
+
+	urlPath := "http://example.com/v1/sample/api"
+	sendReq := &SendRequest{
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err := lc.Send(ctx, sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(resp.Response.StatusCode, responses[0].Response.StatusCode); diff != nil {
+		t.Fatalf("expected getting proxied response: got %v", diff)
+	}
+
+	if len(lc.tokenContexts) != 1 {
+		t.Fatalf("bad: len(tokenContexts); expected: 1, actual: %d", len(lc.tokenContexts))
+	}
+
+	// Wait for goroutine to kick off the renewal
+	time.Sleep(200 * time.Millisecond)
+
+	urlPath = "http://example.com" + vaultPathTokenRevoke
+	input := `{"token":"testtoken"}`
+	sendReq = &SendRequest{
+		Request:     httptest.NewRequest("PUT", urlPath, strings.NewReader(input)),
+		RequestBody: []byte(input),
+	}
+	resp, err = lc.Send(ctx, sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for renewal goroutine to shutdown
+	time.Sleep(200 * time.Millisecond)
+
+	if len(lc.tokenContexts) != 0 {
+		t.Fatalf("bad: len(tokenContexts); expected: 0, actual: %d", len(lc.tokenContexts))
+	}
+
+	// Reset the lease cache
+	lc = testNewLeaseCache(t, responses)
+
+	// Cache the new token again
+	urlPath = "http://example.com/v1/sample/api"
+	sendReq = &SendRequest{
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err = lc.Send(ctx, sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for goroutine to kick off the renewal
+	time.Sleep(200 * time.Millisecond)
+
+	urlPath = "http://example.com" + vaultPathTokenRevokeAccessor
+	input = `{"accessor":"testaccessor"}`
+	sendReq = &SendRequest{
+		Request:     httptest.NewRequest("PUT", urlPath, strings.NewReader(input)),
+		RequestBody: []byte(input),
+	}
+	resp, err = lc.Send(ctx, sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for renewal goroutine to shutdown
+	time.Sleep(200 * time.Millisecond)
+
+	if len(lc.tokenContexts) != 0 {
+		t.Fatalf("bad: len(tokenContexts); expected: 0, actual: %d", len(lc.tokenContexts))
+	}
+
+	// Reset the lease cache
+	lc = testNewLeaseCache(t, responses)
+
+	// Cache the new token again
+	urlPath = "http://example.com/v1/sample/api"
+	sendReq = &SendRequest{
+		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input"}`)),
+	}
+	resp, err = lc.Send(ctx, sendReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for goroutine to kick off the renewal
+	time.Sleep(200 * time.Millisecond)
+
+	err = lc.handleCacheClear(ctx, "all", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for renewal goroutine to shutdown
+	time.Sleep(200 * time.Millisecond)
+
+	if len(lc.tokenContexts) != 0 {
+		t.Fatalf("bad: len(tokenContexts); expected: 0, actual: %d", len(lc.tokenContexts))
+	}
 }
 
 func TestCache_ComputeIndexID(t *testing.T) {
@@ -76,10 +201,10 @@ func TestCache_LeaseCache_EmptyToken(t *testing.T) {
 			Response: &api.Response{
 				Response: &http.Response{
 					StatusCode: http.StatusCreated,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "testtoken"}}`)),
 				},
 			},
-			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "testtoken"}}`),
 		},
 	}
 	lc := testNewLeaseCache(t, responses)
@@ -108,10 +233,10 @@ func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 			Response: &api.Response{
 				Response: &http.Response{
 					StatusCode: http.StatusCreated,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test", "renewable": true}}`)),
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "testtoken", "renewable": true}}`)),
 				},
 			},
-			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test", "renewable": true}}`),
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "testtoken", "renewable": true}}`),
 		},
 		&SendResponse{
 			Response: &api.Response{
@@ -155,7 +280,7 @@ func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 	// returned to the lease cache. But make sure that the token in the request
 	// is valid.
 	sendReq = &SendRequest{
-		Token:   "test",
+		Token:   "testtoken",
 		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input_changed"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
@@ -169,7 +294,7 @@ func TestCache_LeaseCache_SendCacheable(t *testing.T) {
 	// Make the same request again and ensure that the same reponse is returned
 	// again.
 	sendReq = &SendRequest{
-		Token:   "test",
+		Token:   "testtoken",
 		Request: httptest.NewRequest("GET", urlPath, strings.NewReader(`{"value": "input_changed"}`)),
 	}
 	resp, err = lc.Send(context.Background(), sendReq)
@@ -246,10 +371,10 @@ func TestCache_LeaseCache_SendNonCacheableNonTokenLease(t *testing.T) {
 			Response: &api.Response{
 				Response: &http.Response{
 					StatusCode: http.StatusCreated,
-					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "test"}}`)),
+					Body:       ioutil.NopCloser(strings.NewReader(`{"value": "invalid", "auth": {"client_token": "testtoken"}}`)),
 				},
 			},
-			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "test"}}`),
+			ResponseBody: []byte(`{"value": "invalid", "auth": {"client_token": "testtoken"}}`),
 		},
 	}
 	lc := testNewLeaseCache(t, responses)

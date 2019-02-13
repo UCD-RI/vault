@@ -277,9 +277,8 @@ func (c *LeaseCache) Send(ctx context.Context, req *SendRequest) (*SendResponse,
 		return resp, nil
 	}
 
-	c.logger.Debug("storing response into the cache and starting the secret renewal")
-
 	// Store the index in the cache
+	c.logger.Debug("storing response into the cache")
 	err = c.db.Set(index)
 	if err != nil {
 		c.logger.Error("failed to cache the proxied response", "error", err)
@@ -312,6 +311,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 			c.logger.Error("failed to evict index", "id", id, "error", err)
 			return
 		}
+		delete(c.tokenContexts, index.Token)
 	}()
 
 	client, err := api.NewClient(api.DefaultConfig())
@@ -337,7 +337,7 @@ func (c *LeaseCache) startRenewing(ctx context.Context, index *cachememdb.Index,
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Debug("shutdown triggered, stopping renewer", "path", req.Request.URL.Path)
+			c.logger.Debug("context cancelled; stopping renewer", "path", req.Request.URL.Path)
 			return
 		case err := <-renewer.DoneCh():
 			if err != nil {
@@ -503,10 +503,9 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 			return nil
 		}
 
-		tokenCtxInfo.CancelFunc()
+		c.logger.Debug("cancelling context of index attached to token")
 
-		// Remove the cancelled context from the map
-		delete(c.tokenContexts, clearValue)
+		tokenCtxInfo.CancelFunc()
 
 	case "token_accessor", "lease":
 		// Get the cached index and cancel the corresponding renewer context
@@ -517,14 +516,15 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 		if index == nil {
 			return nil
 		}
-		index.RenewCtxInfo.CancelFunc()
 
-		// Remove the cancelled context from the map
-		delete(c.tokenContexts, index.Token)
+		c.logger.Debug("cancelling context of index attached to accessor")
+
+		index.RenewCtxInfo.CancelFunc()
 
 	case "all":
 		// Cancel the base context which triggers all the goroutines to
 		// stop and evict entries from cache.
+		c.logger.Debug("cancelling base context")
 		c.baseCtxInfo.CancelFunc()
 
 		// Reset the base context
@@ -538,9 +538,6 @@ func (c *LeaseCache) handleCacheClear(ctx context.Context, clearType string, cle
 		if err := c.db.Flush(); err != nil {
 			return err
 		}
-
-		// Reset the token contexts map
-		c.tokenContexts = make(map[string]*ContextInfo)
 
 	default:
 		return errInvalidType
